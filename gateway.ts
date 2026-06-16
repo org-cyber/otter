@@ -343,6 +343,57 @@ app.post('/team/settle', async (req, res) => {
 });
 
 
+// Get team stats
+// Get team stats
+app.get('/team/stats/:wallet', async (req, res) => {
+  const wallet = req.params.wallet;
+
+  try {
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${PACKAGE}::seal_api_pool::get_team_stats`,
+      arguments: [tx.object(POOL), tx.pure.address(wallet)],
+    });
+
+    const result = await client.devInspectTransactionBlock({
+      transactionBlock: tx,
+      sender: GATEWAY_ADDR,
+    });
+
+    const returnValues = result.results?.[0]?.returnValues;
+    if (!returnValues || returnValues.length < 3) {
+      return res.json({ team: null });
+    }
+
+    // Each return value is [ [bytes...], "type" ]
+    const parseU64 = (val: any): bigint => {
+      const bytes = new Uint8Array(val[0]);
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      return view.getBigUint64(0, true);
+    };
+
+    const balance = parseU64(returnValues[0]);
+    const totalSpent = parseU64(returnValues[1]);
+    const callCount = parseU64(returnValues[2]);
+
+    // If all zeros, team probably doesn't exist
+    if (balance === 0n && totalSpent === 0n && callCount === 0n) {
+      return res.json({ team: null });
+    }
+
+    res.json({
+      team: {
+        team_balance: balance.toString(),
+        total_spent: totalSpent.toString(),
+        call_count: Number(callCount),
+      },
+    });
+  } catch (err) {
+    console.error('Team stats error:', err);
+    res.json({ team: null });
+  }
+});
+
 // ── EVENT INDEXER ENDPOINTS ───────────────────────────────────────────────
 
 // Start background polling

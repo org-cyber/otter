@@ -28,6 +28,12 @@ const [loading, setLoading] = useState(false);
 const [prompt, setPrompt] = useState('');
 const [apiLoading, setApiLoading] = useState(false);
 const [apiResponse, setApiResponse] = useState<any>(null);
+const [teamData, setTeamData] = useState<any>(null);
+const [memberAddress, setMemberAddress] = useState('');
+const [memberCap, setMemberCap] = useState('');
+const [createTeamLoading, setCreateTeamLoading] = useState(false);
+const [addMemberLoading, setAddMemberLoading] = useState(false);
+const [teamMembers, setTeamMembers] = useState<any[]>([]);
 
   const refreshBalance = async () => {
     if (!wallet) return;
@@ -66,12 +72,58 @@ const [apiResponse, setApiResponse] = useState<any>(null);
     }
   };
 
-  useEffect(() => {
-    if (!wallet) return;
+const refreshTeamData = async () => {
+  if (!wallet) return;
+  try {
+    const res = await fetch(`${GATEWAY_URL}/team/stats/${wallet}`);
+    const data = await res.json();
+    if (data.team) {
+      setTeamData(data.team);
+    } else {
+      setTeamData(null);
+    }
+  } catch (err) {
+    console.error('Team stats error:', err);
+    setTeamData(null);
+  }
+};
 
+const refreshTeamMembers = async () => {
+  if (!wallet) return;
+  try {
+    const res = await fetch(`${GATEWAY_URL}/events/${wallet}`);
+    const data = await res.json();
+    
+    // Filter TeamMemberAddedEvent for this team
+    const members = (data.events || [])
+      .filter((e: any) => e.type?.includes('TeamMemberAddedEvent'))
+      .filter((e: any) => e.parsedJson?.team_id === wallet)
+      .map((e: any) => ({
+        address: e.parsedJson?.member,
+        dailyCap: e.parsedJson?.daily_cap,
+        timestamp: e.parsedJson?.timestamp,
+      }));
+    
+    setTeamMembers(members);
+  } catch (err) {
+    console.error('Team members error:', err);
+    setTeamMembers([]);
+  }
+};
+
+     useEffect(() => {
+    if (!wallet) return;
     refreshBalance();
     refreshEvents();
+    refreshTeamData();
+    refreshTeamMembers();
   }, [wallet]);
+
+
+
+
+  
+
 
 const handleApiCall = async () => {
   if (!wallet || !prompt.trim()) return;
@@ -148,6 +200,105 @@ const handleApiCall = async () => {
   }
 };
 
+const handleCreateTeam = async () => {
+  if (!wallet) {
+    alert('Connect wallet first');
+    return;
+  }
+
+  setCreateTeamLoading(true);
+
+  try {
+    const tx = new Transaction();
+    tx.setGasBudget(10_000_000);
+
+    // Split 0.01 SUI from gas coin for team deposit
+    const [paymentCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(10_000_000n)]);
+
+    tx.moveCall({
+      target: `${PACKAGE_ID}::seal_api_pool::create_team`,
+      arguments: [
+        tx.object(POOL_ID),
+        paymentCoin,
+        tx.pure.u64(5_000_000n),   // team_daily_cap
+        tx.pure.u64(50_000_000n),  // team_monthly_cap
+        tx.object('0x6'),
+      ],
+    });
+
+    signAndExecute(
+      { transaction: tx },
+      {
+        onSuccess: async (result) => {
+          alert(`Team created!\nDigest: ${result.digest}`);
+          await new Promise((r) => setTimeout(r, 2000));
+          await refreshTeamData();
+          await refreshBalance();
+          await refreshEvents();
+            await refreshTeamMembers();
+          setAddMemberLoading(false);
+          setCreateTeamLoading(false);
+        },
+        onError: (err) => {
+          alert('Failed: ' + err.message);
+          setCreateTeamLoading(false);
+        },
+      }
+    );
+  } catch (err: any) {
+    alert('Error: ' + err.message);
+    setCreateTeamLoading(false);
+  }
+};
+
+const handleAddMember = async () => {
+  if (!wallet || !memberAddress.trim() || !memberCap.trim()) {
+    alert('Fill in member address and daily cap');
+    return;
+  }
+
+  setAddMemberLoading(true);
+
+  try {
+    const tx = new Transaction();
+    tx.setGasBudget(10_000_000);
+
+    tx.moveCall({
+      target: `${PACKAGE_ID}::seal_api_pool::add_team_member`,
+      arguments: [
+        tx.object(POOL_ID),
+        tx.pure.address(wallet),              // team_id = your address (you're the admin)
+        tx.pure.address(memberAddress.trim()), // member to add
+        tx.pure.u64(BigInt(memberCap.trim())), // member_daily_cap
+        tx.object('0x6'),
+      ],
+    });
+
+    signAndExecute(
+      { transaction: tx },
+      {
+        onSuccess: async (result) => {
+          alert(`Member added!\nDigest: ${result.digest}`);
+          setMemberAddress('');
+          setMemberCap('');
+          await new Promise((r) => setTimeout(r, 2000));
+          await refreshTeamData();
+          await refreshEvents();
+            await refreshTeamMembers();
+          setAddMemberLoading(false);
+          setAddMemberLoading(false);
+        },
+        onError: (err) => {
+          alert('Failed: ' + err.message);
+          setAddMemberLoading(false);
+        },
+      }
+    );
+  } catch (err: any) {
+    alert('Error: ' + err.message);
+    setAddMemberLoading(false);
+  }
+};
 
 
   const handleQuickSetup = async () => {
@@ -389,6 +540,159 @@ const handleApiCall = async () => {
             </button>
           </div>
 
+
+                    {/* ── Team Treasury ── */}
+          <div
+            style={{
+              background: '#111',
+              padding: 24,
+              borderRadius: 12,
+              marginTop: 24,
+            }}
+          >
+            <h2 style={{ fontSize: 20, marginBottom: 16 }}>
+              👥 Team Treasury
+            </h2>
+
+            {!teamData ? (
+              <div>
+                <p style={{ color: '#888', marginBottom: 16 }}>
+                  No team treasury yet. Create one to share API spend with your team.
+                </p>
+                <button
+                  onClick={handleCreateTeam}
+                  disabled={createTeamLoading}
+                  style={{
+                    padding: '12px 24px',
+                    fontSize: 16,
+                    fontWeight: 'bold',
+                    background: createTeamLoading ? '#333' : '#00d4aa',
+                    color: '#000',
+                    border: 'none',
+                    borderRadius: 8,
+                    cursor: createTeamLoading ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {createTeamLoading ? 'Creating...' : '➕ Create Team (0.01 SUI)'}
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr 1fr',
+                    gap: 12,
+                    marginBottom: 16,
+                  }}
+                >
+                  <div style={{ background: '#1a1a1a', padding: 12, borderRadius: 8 }}>
+                    <div style={{ color: '#888', fontSize: 12 }}>Team Balance</div>
+                    <div style={{ fontSize: 24, fontWeight: 'bold', color: '#00d4aa' }}>
+                      {(Number(teamData.team_balance) / 1e9).toFixed(4)} SUI
+                    </div>
+                  </div>
+                  <div style={{ background: '#1a1a1a', padding: 12, borderRadius: 8 }}>
+                    <div style={{ color: '#888', fontSize: 12 }}>Total Spent</div>
+                    <div style={{ fontSize: 24, fontWeight: 'bold' }}>
+                      {(Number(teamData.total_spent) / 1e9).toFixed(4)} SUI
+                    </div>
+                  </div>
+                  <div style={{ background: '#1a1a1a', padding: 12, borderRadius: 8 }}>
+                    <div style={{ color: '#888', fontSize: 12 }}>Calls Made</div>
+                    <div style={{ fontSize: 24, fontWeight: 'bold' }}>
+                      {teamData.call_count}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: 16 }}>
+                  <h3 style={{ fontSize: 14, color: '#888', marginBottom: 8 }}>
+                    Add Team Member
+                  </h3>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      type="text"
+                      placeholder="Member wallet address"
+                      value={memberAddress}
+                      onChange={(e) => setMemberAddress(e.target.value)}
+                      style={{
+                        flex: 2,
+                        padding: 10,
+                        background: '#1a1a1a',
+                        border: '1px solid #333',
+                        borderRadius: 6,
+                        color: '#fff',
+                        fontSize: 13,
+                      }}
+                    />
+                    <input
+                      type="number"
+                      placeholder="Daily cap (MIST)"
+                      value={memberCap}
+                      onChange={(e) => setMemberCap(e.target.value)}
+                      style={{
+                        flex: 1,
+                        padding: 10,
+                        background: '#1a1a1a',
+                        border: '1px solid #333',
+                        borderRadius: 6,
+                        color: '#fff',
+                        fontSize: 13,
+                      }}
+                    />
+                    <button
+                      onClick={handleAddMember}
+                      disabled={addMemberLoading}
+                      style={{
+                        padding: '10px 16px',
+                        fontSize: 14,
+                        fontWeight: 'bold',
+                        background: addMemberLoading ? '#333' : '#00d4aa',
+                        color: '#000',
+                        border: 'none',
+                        borderRadius: 6,
+                        cursor: addMemberLoading ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {addMemberLoading ? 'Adding...' : 'Add'}
+                    </button>
+                  </div>
+                </div>
+                          {teamMembers.length > 0 && (
+                  <div style={{ marginTop: 16 }}>
+                    <h3 style={{ fontSize: 14, color: '#888', marginBottom: 8 }}>
+                      Team Members ({teamMembers.length})
+                    </h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {teamMembers.map((m, i) => (
+                        <div
+                          key={i}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            padding: 10,
+                            background: '#1a1a1a',
+                            borderRadius: 6,
+                            fontSize: 13,
+                          }}
+                        >
+                          <span style={{ fontFamily: 'monospace', color: '#aaa' }}>
+                            {m.address?.slice(0, 16)}...
+                          </span>
+                          <span style={{ color: '#00d4aa' }}>
+                            {(Number(m.dailyCap) / 1e9).toFixed(6)} SUI/day
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div
             style={{
               background: '#111',
@@ -462,8 +766,7 @@ const handleApiCall = async () => {
                       )}
           </div>
 
-          {/* ── API Call Demo ── */}
-                {/* ── API Call Demo ── */}
+               {/* ── API Call Demo ── */}
           <div
             style={{
               background: '#111',
@@ -553,9 +856,10 @@ const handleApiCall = async () => {
                 )}
               </div>
             )}
-                   </div>
-        </div>
-      )}
-    </div>
+          </div>
+
+        </div>    
+      )}            
+    </div>          
   );
 }

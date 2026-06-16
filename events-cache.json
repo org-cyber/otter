@@ -6,6 +6,137 @@
   "events": [
     {
       "id": {
+        "txDigest": "2GF7xQDbY4b7ae5iYiXrxGDaTi4zVvqFTder7vS1YDdN",
+        "eventSeq": "0"
+      },
+      "packageId": "0x6e1de9eee9168dbf4803abf85fa955c0047111c8572ff74a3e47d3983bd61fd4",
+      "transactionModule": "seal_api_pool",
+      "sender": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+      "type": "0x6e1de9eee9168dbf4803abf85fa955c0047111c8572ff74a3e47d3983bd61fd4::seal_api_pool::TeamMemberAddedEvent",
+      "parsedJson": {
+        "daily_cap": "1000000",
+        "member": "0xcacbdf900254eef63c731372b64b0688835762b0aa6facd93babd2d2694d2e88",
+        "team_id": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+        "timestamp": "1781626427102"
+      },
+      "bcsEncoding": "base64",
+      "bcs": "KEQb/D/h+Y4N7FdVMiIQwk1nBUojus7CKZ9tL4j+jUfKy9+QAlTu9jxzE3K2SwaIg1disKpvrNk7q9LSaU0uiEBCDwAAAAAA3tY10Z4BAAA=",
+      "timestampMs": "1781626427523"
+    },
+    {
+      "id": {
+        "txDigest": "DohNdHDi8bEa8PGBQEViNfzUj51nSCHLBNaEy8vEyXx8",
+        "eventSeq": "0"
+      },
+      "packageId": "0x6e1de9eee9168dbf4803abf85fa955c0047111c8572ff74a3e47d3983bd61fd4",
+      "transactionModule": "seal_api_pool",
+      "sender": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+      "type": "0x6e1de9eee9168dbf4803abf85fa955c0047111c8572ff74a3e47d3983bd61fd4::seal_api_pool::TeamCreatedEvent",
+      "parsedJson": {
+        "admin": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+        "initial_balance": "10000000",
+        "team_id": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+        "timestamp": "1781623960994"
+      },
+      "bcsEncoding": "base64",
+      "bcs": "KEQb/D/h+Y4N7FdVMiIQwk1nBUojus7CKZ9tL4j+jUcoRBv8P+H5jg3sV1UyIhDCTWcFSiO6zsIpn20viP6NR4CWmAAAAAAAojUQ0Z4BAAA=",
+      "timestampMs": "1781623961561"
+    },
+    {
+      "id": {
+        "txDigest": "FsDufTSb4sftLxSt7kqHnck72gC78nuU547hefMQ4Yua",
+        "eventSeq": "0"
+      },
+      "packageId": "0x6e1de9eee9168dbf4803abf85fa955c0047111c8572ff74a3e47d3983bd61fd4",
+      "transactionModule": "seal_api_pool",
+      "sender": "0xdb46b6c133f989a776279be1ef95c2f3cc0be6cf8103d8ab390363964d475c13",
+      "type": "0x6e1de9eee9168dbf4803abf85fa955c0047111c8572ff74a3e47d3983bd61fd4::seal_api_pool::ApiCallReceiptEvent",
+      "parsedJson": {
+        "cost": "990000",
+        "daily_spent": "1000000",
+        "fee": "10000",
+        "is_team_call": false,
+        "model_name": [
+          113,
+          119,
+          101,
+          110,
+          50,
+          46,
+          53,
+          45,
+          99,
+          111,
+          100,
+          101,
+          114,
+          45,
+          49,
+          46,
+          53,
+          98
+        ],
+        "monthly_spent": "1000000",
+        "provider": [
+          108,
+          111,
+          99,
+          97,
+          108
+        ],
+        "remaining_balance": "49000000",
+        "request_hash": [
+          119,
+          114,
+          105,
+          116,
+          101,
+          32,
+          97,
+          32,
+          98,
+          97,
+          115,
+          105,
+          99,
+          32,
+          104,
+          101,
+          108,
+          108,
+          111,
+          119,
+          32,
+          119,
+          111,
+          114,
+          108,
+          100,
+          32,
+          111,
+          117,
+          116,
+          112,
+          117,
+          116,
+          32,
+          105,
+          110,
+          32,
+          103,
+          111
+        ],
+        "timestamp": "1781622569841",
+        "tokens_used": "39",
+        "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+        "wallet_call_number": "1"
+      },
+      "bcsEncoding": "base64",
+      "bcs": "KEQb/D/h+Y4N7FdVMiIQwk1nBUojus7CKZ9tL4j+jUcwGw8AAAAAABAnAAAAAAAABWxvY2FsEnF3ZW4yLjUtY29kZXItMS41YicAAAAAAAAAJ3dyaXRlIGEgYmFzaWMgaGVsbG93IHdvcmxkIG91dHB1dCBpbiBnb0Cu6wIAAAAAQEIPAAAAAABAQg8AAAAAAHH7+tCeAQAAAQAAAAAAAAAA",
+      "timestampMs": "1781622570268"
+    },
+    {
+      "id": {
         "txDigest": "Jx5ciBirUYHLRU14iqd6EEYofMUg7JRTeBftfHhciYj",
         "eventSeq": "0"
       },
@@ -528,5 +659,5 @@
       "timestampMs": "1780849271858"
     }
   ],
-  "lastUpdated": 1781620104587
+  "lastUpdated": 1781638933353
 }
