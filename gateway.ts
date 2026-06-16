@@ -3,6 +3,7 @@ import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import dotenv from 'dotenv';
+import cors from 'cors';
 import { quickSetup } from './ptb-setup';
 import { x402ProviderMiddleware } from './provider-adapter';
 import { startIndexer, getEventsForWallet, getEventsByType, getAllEvents, getStats } from './indexer';
@@ -10,6 +11,7 @@ dotenv.config();
 
 const app = express();
 app.use(express.json());
+app.use(cors({ origin: '*' }));
 
 const client = new SuiClient({ url: process.env.SUI_RPC || getFullnodeUrl('testnet') });
 
@@ -84,36 +86,62 @@ app.get('/health', async (_req, res) => {
   res.json({ status: 'ok', pool: POOL, gateway: GATEWAY_ADDR });
 });
 
-// Simple API proxy route (no x402 yet — for testing)
-app.post('/api/:provider', async (req, res) => {
-  const { provider } = req.params;
-  const apiResponse = await proxyToProvider(provider, req.body);
-  res.json(apiResponse);
-});
+
 
 // Check wallet balance (gasless view call)
 app.get('/balance/:wallet', async (req, res) => {
   const wallet = req.params.wallet;
-  
-  const tx = new Transaction();
-  tx.moveCall({
-    target: `${PACKAGE}::seal_api_pool::get_balance`,
-    arguments: [tx.object(POOL), tx.pure.address(wallet)],
-  });
 
-  const result = await client.devInspectTransactionBlock({
-    transactionBlock: tx,
-    sender: GATEWAY_ADDR,
-  });
+  try {
+    const tx = new Transaction();
 
-  const returnVal = result.results?.[0]?.returnValues?.[0];
-  let balance = 0;
-  if (returnVal) {
-    const bytes = returnVal[0] as number[];
-    balance = parseInt(Buffer.from(bytes).toString('hex'), 16);
+    tx.moveCall({
+      target: `${PACKAGE}::seal_api_pool::get_balance`,
+      arguments: [
+        tx.object(POOL),
+        tx.pure.address(wallet),
+      ],
+    });
+
+    const result = await client.devInspectTransactionBlock({
+      transactionBlock: tx,
+      sender: GATEWAY_ADDR,
+
+      
+    });
+
+    const returnValues =
+      result.results?.[0]?.returnValues;
+
+    if (!returnValues || !returnValues[0]) {
+      return res.json({ wallet, balance: 0 });
+    }
+
+    // ✅ SAFE DECODING (NO HEX, NO parseInt)
+    const bytes = new Uint8Array(returnValues[0][0]);
+
+    const view = new DataView(
+      bytes.buffer,
+      bytes.byteOffset,
+      bytes.byteLength
+    );
+
+    // assume u64 return from Move
+    const balance = view.getBigUint64(0, true);
+
+    return res.json({
+      wallet,
+      balance: balance.toString(),
+    });
+
+  } catch (err) {
+    console.error('Balance error:', err);
+
+    return res.status(500).json({
+      wallet,
+      balance: "0",
+    });
   }
-
-  res.json({ wallet, balance });
 });
 
 // Settle payment on-chain
