@@ -630,34 +630,83 @@ const refreshStatus = useCallback(async () => {
           </div>
 
           {/* ── PROVIDERS ───────────────────────────────────────────────── */}
+     {/* ── PROVIDERS ───────────────────────────────────────────────── */}
           <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24 }}>
             <h2 style={{ fontSize: 18, marginBottom: 16 }}>🔌 Providers</h2>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               {Object.entries(providers).map(([name, info]) => (
-                <div key={name} style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  padding: 12,
-                  background: '#1a1a1a',
-                  borderRadius: 8,
-                }}>
-                  <div>
-                    <div style={{ fontWeight: 'bold', textTransform: 'capitalize' }}>{name}</div>
-                    <div style={{ color: '#888', fontSize: 12, marginTop: 2 }}>
-                      {Object.keys(info.models).join(', ')}
-                    </div>
-                  </div>
-                  <span style={{
-                    padding: '4px 12px',
-                    borderRadius: 4,
-                    fontSize: 12,
-                    fontWeight: 'bold',
-                    background: info.configured ? '#004d33' : '#4d3300',
-                    color: info.configured ? '#00d4aa' : '#ffaa00',
+                <div key={name} style={{ background: '#1a1a1a', borderRadius: 10, overflow: 'hidden' }}>
+                  {/* Provider header */}
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '12px 16px',
+                    borderBottom: '1px solid #222',
                   }}>
-                    {info.configured ? '● LIVE' : '○ STUB'}
-                  </span>
+                    <div style={{ fontWeight: 'bold', fontSize: 15, textTransform: 'capitalize' }}>{name}</div>
+                    <span style={{
+                      padding: '4px 12px',
+                      borderRadius: 4,
+                      fontSize: 12,
+                      fontWeight: 'bold',
+                      background: info.configured ? '#004d33' : '#4d3300',
+                      color: info.configured ? '#00d4aa' : '#ffaa00',
+                    }}>
+                      {info.configured ? '● LIVE' : '○ STUB'}
+                    </span>
+                  </div>
+                  {/* Model list */}
+                  <div style={{ padding: '8px 0' }}>
+                    {Object.entries(info.models).map(([model, modelInfo]) => (
+                      <div key={model} style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '8px 16px',
+                        cursor: info.configured ? 'pointer' : 'default',
+                        transition: 'background 0.15s',
+                      }}
+                        onMouseEnter={e => (e.currentTarget.style.background = '#222')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                        onClick={() => {
+                          if (info.configured) {
+                            setSelectedModel(model);
+                          }
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {info.configured && selectedModel === model && (
+                            <span style={{ color: '#00d4aa', fontSize: 12 }}>✓</span>
+                          )}
+                          {(!info.configured || selectedModel !== model) && (
+                            <span style={{ width: 16, display: 'inline-block' }} />
+                          )}
+                          <span style={{
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                            color: info.configured ? '#fff' : '#666',
+                          }}>
+                            {model}
+                          </span>
+                          {!info.configured && (
+                            <span style={{
+                              fontSize: 10,
+                              color: '#555',
+                              background: '#2a2a2a',
+                              padding: '2px 6px',
+                              borderRadius: 3,
+                            }}>
+                              stub
+                            </span>
+                          )}
+                        </div>
+                        <span style={{ fontSize: 11, color: '#666', fontFamily: 'monospace' }}>
+                          {(modelInfo.costPer1kTokens / 1e9).toFixed(6)} SUI / 1K tokens
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
@@ -813,27 +862,24 @@ const refreshStatus = useCallback(async () => {
           <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24 }}>
             <h2 style={{ fontSize: 18, marginBottom: 16 }}>🤖 API Call Demo</h2>
 
-            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                style={{
-                  padding: 10,
-                  background: '#1a1a1a',
-                  border: '1px solid #333',
-                  borderRadius: 6,
-                  color: '#fff',
+           <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Selected model:</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{
+                  fontFamily: 'monospace',
                   fontSize: 13,
-                }}
-              >
-                {Object.entries(providers).flatMap(([providerName, info]) =>
-                  Object.keys(info.models).map(model => (
-                    <option key={model} value={model}>
-                      {model} ({providerName})
-                    </option>
-                  ))
-                )}
-              </select>
+                  color: '#00d4aa',
+                  background: '#0a2a1a',
+                  border: '1px solid #00d4aa33',
+                  padding: '6px 12px',
+                  borderRadius: 6,
+                }}>
+                  {selectedModel}
+                </span>
+                <span style={{ fontSize: 12, color: '#666' }}>
+                  — pick a model from the Providers section above
+                </span>
+              </div>
             </div>
 
             <textarea
