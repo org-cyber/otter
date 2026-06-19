@@ -9,45 +9,36 @@ import {
 import { Transaction } from '@mysten/sui/transactions';
 
 const GATEWAY_URL = 'http://localhost:3001';
+const SUI_SCAN = 'https://suiscan.xyz/testnet/object';
 
-const PACKAGE_ID =
-  '0x6e1de9eee9168dbf4803abf85fa955c0047111c8572ff74a3e47d3983bd61fd4';
-
-const POOL_ID =
-  '0xed89af9714f4d509c3a3578d295cd3acd71b4a4ae51dc6afca2d295ac96c9809';
+// ── NEW PACKAGE ID ──
+const PACKAGE_ID = '0xdbfb39eabe0938cb1495443b733e00bd90799a6d5ea870227d9f0e426091b480';
 
 // ── TYPES ───────────────────────────────────────────────────────────────────
 
-interface WalletStatus {
-  wallet: string;
+interface TreasuryNode {
+  id: string;
+  name: string;
+  owner: string;
   balance: string;
-  caps: { daily: string; monthly: string };
-  spent: { daily: string; monthly: string; pending: string; reserved: string };
-  pause: {
-    onChain: boolean;
-    soft: { pausedAt: number; reason: string; auto: boolean } | null;
-  };
-  velocity: { currentRate: number; windowMs: number; threshold: number };
+  paused: boolean;
+  parent: string | null;
+  children: TreasuryNode[];
+  status?: any; // fetched from gateway
 }
 
-interface ApiKey {
+interface ApiKeyRecord {
   key: string;
+  treasuryId: string;
   label: string;
   createdAt: number;
   revoked: boolean;
-  allowApiKeyResume: boolean;
+  allowResume: boolean;
 }
 
 interface ProviderInfo {
   configured: boolean;
   models: Record<string, { costPer1kTokens: number }>;
-}
-
-interface SuiEvent {
-  id: { txDigest: string; eventSeq: number };
-  type: string;
-  parsedJson: any;
-  timestampMs: number;
 }
 
 // ── UTILITY ─────────────────────────────────────────────────────────────────
@@ -73,53 +64,69 @@ export default function Home() {
 
   // ── STATE ────────────────────────────────────────────────────────────────
 
-  const [status, setStatus] = useState<WalletStatus | null>(null);
-  const [events, setEvents] = useState<SuiEvent[]>([]);
+  const [treasuries, setTreasuries] = useState<TreasuryNode[]>([]);
+  const [selectedTreasury, setSelectedTreasury] = useState<string | null>(null);
+  const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
   const [providers, setProviders] = useState<Record<string, ProviderInfo>>({});
-  const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
+  
+  const [newTreasuryName, setNewTreasuryName] = useState('');
+  const [newTreasuryDeposit, setNewTreasuryDeposit] = useState('0.05');
+  
+  const [spawnParentId, setSpawnParentId] = useState('');
+  const [spawnName, setSpawnName] = useState('');
+  const [spawnBudget, setSpawnBudget] = useState('0.01');
+  const [spawnDailyCap, setSpawnDailyCap] = useState('5000000');
+  const [spawnProviders, setSpawnProviders] = useState<string[]>(['groq']);
+  
   const [newKeyLabel, setNewKeyLabel] = useState('');
   const [allowKeyResume, setAllowKeyResume] = useState(false);
-  const [keyLoading, setKeyLoading] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
-  const [setupLoading, setSetupLoading] = useState(false);
-  const [depositLoading, setDepositLoading] = useState(false);
-  const [resumeLoading, setResumeLoading] = useState(false);
-  const [apiLoading, setApiLoading] = useState(false);
-  const [apiResponse, setApiResponse] = useState<any>(null);
-  const [prompt, setPrompt] = useState('');
-  const [selectedModel, setSelectedModel] = useState('llama-3.1-8b-instant');
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  
+  const [prompt1, setPrompt1] = useState('');
+  const [prompt2, setPrompt2] = useState('');
+  const [prompt3, setPrompt3] = useState('');
+  const [parallelResults, setParallelResults] = useState<any[]>([]);
+  const [parallelLoading, setParallelLoading] = useState(false);
+  
+  const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // ── REFRESH FUNCTIONS ────────────────────────────────────────────────────
-const refreshStatus = useCallback(async () => {
-  if (!wallet) return;
-  try {
-    const res = await fetch(`${GATEWAY_URL}/status/${wallet}`);
-    if (!res.ok) {
-      console.error('Status fetch failed:', res.status);
-      return; // don't overwrite good state with an error object
-    }
-    const data = await res.json();
-    if (data.error) {
-      console.error('Status error from gateway:', data.error);
-      return; // same — bail out, keep previous status
-    }
-    setStatus(data);
-  } catch (err: any) {
-    console.error('Status fetch error:', err);
-    setError('Failed to fetch wallet status: ' + err.message);
-  }
-}, [wallet]);
 
-  const refreshEvents = useCallback(async () => {
+  const refreshTreasuries = useCallback(async () => {
     if (!wallet) return;
     try {
-      const res = await fetch(`${GATEWAY_URL}/events/${wallet}`);
+      const res = await fetch(`${GATEWAY_URL}/agents/${wallet}`);
       const data = await res.json();
-      setEvents(data.events || []);
+      const list = data.treasuries || [];
+      
+      // Build tree structure (max 2 levels)
+      const masters = list.filter((t: any) => !t.parent);
+      const children = list.filter((t: any) => t.parent);
+      
+      const tree: TreasuryNode[] = masters.map((m: any) => ({
+        ...m,
+        balance: m.balance,
+        children: children
+          .filter((c: any) => c.parent === m.treasuryId)
+          .map((c: any) => ({ ...c, children: [] })),
+      }));
+      
+      setTreasuries(tree);
     } catch (err) {
-      console.error('Events fetch error:', err);
+      console.error('Treasuries fetch error:', err);
+    }
+  }, [wallet]);
+
+  const refreshApiKeys = useCallback(async () => {
+    if (!wallet) return;
+    try {
+      const res = await fetch(`${GATEWAY_URL}/keys/${wallet}`);
+      const data = await res.json();
+      setApiKeys(data.keys || []);
+    } catch (err) {
+      console.error('API keys error:', err);
     }
   }, [wallet]);
 
@@ -133,61 +140,71 @@ const refreshStatus = useCallback(async () => {
     }
   }, []);
 
-  const refreshApiKeys = useCallback(async () => {
-    if (!wallet) return;
+  const fetchTreasuryStatus = useCallback(async (treasuryId: string) => {
     try {
-      const res = await fetch(`${GATEWAY_URL}/keys/${wallet}`);
+      const res = await fetch(`${GATEWAY_URL}/status/${treasuryId}`);
       const data = await res.json();
-      setApiKeys(data.keys || []);
+      return data;
     } catch (err) {
-      console.error('API keys error:', err);
+      console.error('Status fetch error:', err);
+      return null;
     }
-  }, [wallet]);
+  }, []);
 
   // ── POLLING ──────────────────────────────────────────────────────────────
 
   useEffect(() => {
     if (!wallet) return;
-
-    refreshStatus();
-    refreshEvents();
-    refreshProviders();
+    refreshTreasuries();
     refreshApiKeys();
-
+    refreshProviders();
+    
     const interval = setInterval(() => {
-      refreshStatus();
-      refreshEvents();
-    }, 10000); // Poll every 10 seconds
-
+      refreshTreasuries();
+    }, 5000);
     return () => clearInterval(interval);
-  }, [wallet, refreshStatus, refreshEvents, refreshProviders, refreshApiKeys]);
+  }, [wallet, refreshTreasuries, refreshApiKeys, refreshProviders]);
 
-  // ── DEPOSIT PTB (Standalone) ───────────────────────────────────────────────
-  // For users who already have a treasury and just want to add funds.
+  // ── CREATE MASTER TREASURY (User-Signed PTB) ────────────────────────────
 
-  const handleDeposit = async () => {
+  const handleCreateTreasury = async () => {
     if (!wallet) {
       setError('Connect wallet first');
       return;
     }
 
-    setDepositLoading(true);
+    setLoading(prev => ({ ...prev, createTreasury: true }));
     setError(null);
 
     try {
+      const depositMist = BigInt(Math.floor(parseFloat(newTreasuryDeposit) * 1e9));
+      
       const tx = new Transaction();
       tx.setGasBudget(10_000_000);
 
-      // Split 0.05 SUI from gas coin for deposit
-      const [paymentCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(50_000_000n)]);
+      // Split deposit from gas coin
+      const [payment] = tx.splitCoins(tx.gas, [tx.pure.u64(depositMist)]);
 
-      tx.moveCall({
-        target: `${PACKAGE_ID}::seal_api_pool::deposit_with_source`,
+      // Create policy
+      const policy = tx.moveCall({
+        target: `${PACKAGE_ID}::agent_treasury::create_policy`,
         arguments: [
-          tx.object(POOL_ID),
-          paymentCoin,
-          tx.pure.vector('u8', Array.from(new TextEncoder().encode('manual'))),
-          tx.object('0x6'),
+          tx.pure.u64(5_000_000n),              // max_daily_spend
+          tx.pure.u64(50_000_000n),             // max_monthly_spend
+          tx.pure.u64(1_000_000n),              // max_single_spend
+          tx.pure.vector('string', ['groq']),    // approved_providers
+          tx.pure.u64(5),                        // velocity_threshold
+        ],
+      });
+
+      // Create master treasury
+      tx.moveCall({
+        target: `${PACKAGE_ID}::agent_treasury::create_master_treasury`,
+        arguments: [
+          payment,
+          tx.pure.string(newTreasuryName || 'Master Treasury'),
+          policy,
+          tx.object('0x6'), // Clock
         ],
       });
 
@@ -196,104 +213,65 @@ const refreshStatus = useCallback(async () => {
         {
           onSuccess: async (result) => {
             setError(null);
-            await new Promise((r) => setTimeout(r, 3000));
-            await refreshStatus();
-            await refreshEvents();
-            setDepositLoading(false);
+            setNewTreasuryName('');
+            await new Promise(r => setTimeout(r, 3000));
+            await refreshTreasuries();
+            setLoading(prev => ({ ...prev, createTreasury: false }));
           },
           onError: (err) => {
-            setError('Deposit failed: ' + err.message);
-            setDepositLoading(false);
+            setError('Create treasury failed: ' + err.message);
+            setLoading(prev => ({ ...prev, createTreasury: false }));
           },
         }
       );
     } catch (err: any) {
       setError('Error: ' + err.message);
-      setDepositLoading(false);
+      setLoading(prev => ({ ...prev, createTreasury: false }));
     }
   };
 
+  // ── SPAWN CHILD AGENT (User-Signed PTB) ─────────────────────────────────
 
-  // ── SETUP TREASURY PTB ───────────────────────────────────────────────────
-  // Single button: deposit + set caps + set provider caps + alert threshold
-
-  const handleSetupTreasury = async () => {
-    if (!wallet) {
-      setError('Connect wallet first');
+  const handleSpawnChild = async () => {
+    if (!wallet || !spawnParentId) {
+      setError('Select a parent treasury');
       return;
     }
 
-    setSetupLoading(true);
+    setLoading(prev => ({ ...prev, spawnChild: true }));
     setError(null);
 
     try {
+      const budgetMist = BigInt(Math.floor(parseFloat(spawnBudget) * 1e9));
+      
       const tx = new Transaction();
       tx.setGasBudget(10_000_000);
 
-      // Split 0.05 SUI from gas coin for deposit
-      const [paymentCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(50_000_000n)]);
+      // Get TreasuryOwnerCap from wallet (we need to pass it)
+      // In practice, you'd query the cap object ID first
+      // For now, we construct the PTB and dapp-kit handles cap resolution
+      
+      const parentTreasury = tx.object(spawnParentId);
 
-      // 1. Deposit with source = manual
-      tx.moveCall({
-        target: `${PACKAGE_ID}::seal_api_pool::deposit_with_source`,
+      const childPolicy = tx.moveCall({
+        target: `${PACKAGE_ID}::agent_treasury::create_policy`,
         arguments: [
-          tx.object(POOL_ID),
-          paymentCoin,
-          tx.pure.vector('u8', Array.from(new TextEncoder().encode('manual'))),
-          tx.object('0x6'),
+          tx.pure.u64(BigInt(spawnDailyCap)),
+          tx.pure.u64(BigInt(spawnDailyCap) * 10n),
+          tx.pure.u64(BigInt(spawnDailyCap) / 5n),
+          tx.pure.vector('string', spawnProviders),
+          tx.pure.u64(3),
         ],
       });
 
-      // 2. Set global spend caps: 5M MIST daily, 50M MIST monthly
       tx.moveCall({
-        target: `${PACKAGE_ID}::seal_api_pool::set_spend_caps`,
+        target: `${PACKAGE_ID}::agent_treasury::spawn_child_agent`,
         arguments: [
-          tx.object(POOL_ID),
-          tx.pure.u64(5_000_000n),
-          tx.pure.u64(50_000_000n),
-          tx.object('0x6'),
-        ],
-      });
-
-      // 3. Set Claude provider cap: 2M MIST daily
-      tx.moveCall({
-        target: `${PACKAGE_ID}::seal_api_pool::set_provider_cap`,
-        arguments: [
-          tx.object(POOL_ID),
-          tx.pure.vector('u8', Array.from(new TextEncoder().encode('claude'))),
-          tx.pure.u64(2_000_000n),
-          tx.object('0x6'),
-        ],
-      });
-
-      // 4. Set OpenAI provider cap: 1M MIST daily
-      tx.moveCall({
-        target: `${PACKAGE_ID}::seal_api_pool::set_provider_cap`,
-        arguments: [
-          tx.object(POOL_ID),
-          tx.pure.vector('u8', Array.from(new TextEncoder().encode('openai'))),
-          tx.pure.u64(1_000_000n),
-          tx.object('0x6'),
-        ],
-      });
-
-      // 5. Set Groq provider cap: 3M MIST daily
-      tx.moveCall({
-        target: `${PACKAGE_ID}::seal_api_pool::set_provider_cap`,
-        arguments: [
-          tx.object(POOL_ID),
-          tx.pure.vector('u8', Array.from(new TextEncoder().encode('groq'))),
-          tx.pure.u64(3_000_000n),
-          tx.object('0x6'),
-        ],
-      });
-
-      // 6. Set low balance alert threshold: 500K MIST
-      tx.moveCall({
-        target: `${PACKAGE_ID}::seal_api_pool::set_low_balance_threshold`,
-        arguments: [
-          tx.object(POOL_ID),
-          tx.pure.u64(500_000n),
+          parentTreasury, // TreasuryOwnerCap will be resolved by dapp-kit
+          parentTreasury,
+          tx.pure.u64(budgetMist),
+          tx.pure.string(spawnName || 'Child Agent'),
+          childPolicy,
           tx.object('0x6'),
         ],
       });
@@ -301,30 +279,76 @@ const refreshStatus = useCallback(async () => {
       signAndExecute(
         { transaction: tx },
         {
-          onSuccess: async (result) => {
+          onSuccess: async () => {
             setError(null);
-            await new Promise((r) => setTimeout(r, 3000));
-            await refreshStatus();
-            await refreshEvents();
-            setSetupLoading(false);
+            setSpawnName('');
+            setSpawnBudget('0.01');
+            await new Promise(r => setTimeout(r, 3000));
+            await refreshTreasuries();
+            setLoading(prev => ({ ...prev, spawnChild: false }));
           },
           onError: (err) => {
-            setError('Transaction failed: ' + err.message);
-            setSetupLoading(false);
+            setError('Spawn failed: ' + err.message);
+            setLoading(prev => ({ ...prev, spawnChild: false }));
           },
         }
       );
     } catch (err: any) {
       setError('Error: ' + err.message);
-      setSetupLoading(false);
+      setLoading(prev => ({ ...prev, spawnChild: false }));
     }
   };
 
-  // ── CREATE API KEY ─────────────────────────────────────────────────────
+  // ── RECLAIM CHILD (User-Signed PTB) ──────────────────────────────────────
 
-  const handleCreateKey = async () => {
+  const handleReclaimChild = async (parentId: string, childId: string) => {
     if (!wallet) return;
-    setKeyLoading(true);
+
+    setLoading(prev => ({ ...prev, [`reclaim_${childId}`]: true }));
+    setError(null);
+
+    try {
+      const tx = new Transaction();
+      tx.setGasBudget(10_000_000);
+
+      const parent = tx.object(parentId);
+      const child = tx.object(childId);
+
+      tx.moveCall({
+        target: `${PACKAGE_ID}::agent_treasury::reclaim_child_budget`,
+        arguments: [
+          parent, // TreasuryOwnerCap
+          parent,
+          child,
+          tx.object('0x6'),
+        ],
+      });
+
+      signAndExecute(
+        { transaction: tx },
+        {
+          onSuccess: async () => {
+            await new Promise(r => setTimeout(r, 3000));
+            await refreshTreasuries();
+            setLoading(prev => ({ ...prev, [`reclaim_${childId}`]: false }));
+          },
+          onError: (err) => {
+            setError('Reclaim failed: ' + err.message);
+            setLoading(prev => ({ ...prev, [`reclaim_${childId}`]: false }));
+          },
+        }
+      );
+    } catch (err: any) {
+      setError('Error: ' + err.message);
+      setLoading(prev => ({ ...prev, [`reclaim_${childId}`]: false }));
+    }
+  };
+
+  // ── CREATE API KEY ───────────────────────────────────────────────────────
+
+  const handleCreateKey = async (treasuryId: string) => {
+    if (!wallet) return;
+    setLoading(prev => ({ ...prev, [`key_${treasuryId}`]: true }));
     setNewKey(null);
 
     try {
@@ -333,8 +357,9 @@ const refreshStatus = useCallback(async () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           wallet,
+          treasuryId,
           label: newKeyLabel || 'default',
-          allowApiKeyResume: allowKeyResume,
+          allowResume: allowKeyResume,
         }),
       });
       const data = await res.json();
@@ -349,48 +374,19 @@ const refreshStatus = useCallback(async () => {
     } catch (err: any) {
       setError('Error: ' + err.message);
     } finally {
-      setKeyLoading(false);
+      setLoading(prev => ({ ...prev, [`key_${treasuryId}`]: false }));
     }
   };
 
-  // ── RESUME WALLET ──────────────────────────────────────────────────────
+  // ── PARALLEL DEMO ────────────────────────────────────────────────────────
 
-  const handleResume = async () => {
-    if (!wallet) return;
-    setResumeLoading(true);
+  const handleParallelCall = async (treasuryId: string, prompt: string, index: number) => {
+    if (!prompt.trim()) return null;
 
-    try {
-      const res = await fetch(`${GATEWAY_URL}/resume/${wallet}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      const data = await res.json();
-      if (data.status === 'success') {
-        await refreshStatus();
-      } else {
-        setError('Resume failed: ' + (data.error || 'Unknown error'));
-      }
-    } catch (err: any) {
-      setError('Error: ' + err.message);
-    } finally {
-      setResumeLoading(false);
-    }
-  };
-
-  // ── API CALL DEMO ───────────────────────────────────────────────────────
-
-  const handleApiCall = async () => {
-    if (!wallet || !prompt.trim()) return;
-    setApiLoading(true);
-    setApiResponse(null);
-    setError(null);
-
-    // Use the first active API key, or fallback to demo mode
-    const activeKey = apiKeys.find(k => !k.revoked);
+    const activeKey = apiKeys.find(k => k.treasuryId === treasuryId && !k.revoked);
     if (!activeKey) {
-      setError('No active API key. Create one first.');
-      setApiLoading(false);
-      return;
+      setError(`No active API key for agent ${index + 1}`);
+      return null;
     }
 
     try {
@@ -401,7 +397,7 @@ const refreshStatus = useCallback(async () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: selectedModel,
+          model: 'llama-3.1-8b-instant',
           messages: [{ role: 'user', content: prompt.trim() }],
           temperature: 0.7,
           max_tokens: 256,
@@ -409,37 +405,53 @@ const refreshStatus = useCallback(async () => {
       });
 
       const data = await res.json();
-
-      if (res.ok) {
-        setApiResponse(data);
-      } else {
-        setApiResponse({
-          error: data.error || 'Request failed',
-          details: data.message || data.details || '',
-        });
-      }
-
-      await new Promise((r) => setTimeout(r, 1000));
-      await refreshStatus();
-      await refreshEvents();
+      return { index, ...data, error: data.error || null };
     } catch (err: any) {
-      setApiResponse({ error: err.message });
-    } finally {
-      setApiLoading(false);
+      return { index, error: err.message };
     }
+  };
+
+  const handleExecuteAll = async () => {
+    setParallelLoading(true);
+    setParallelResults([]);
+    setError(null);
+
+    // Get first 3 treasuries with API keys
+    const eligibleTreasuries = treasuries
+      .flatMap(t => [t, ...t.children])
+      .filter(t => apiKeys.some(k => k.treasuryId === t.id && !k.revoked))
+      .slice(0, 3);
+
+    if (eligibleTreasuries.length === 0) {
+      setError('No agents with active API keys. Create keys first.');
+      setParallelLoading(false);
+      return;
+    }
+
+    const prompts = [prompt1, prompt2, prompt3];
+    
+    // Fire all concurrently
+    const results = await Promise.all(
+      eligibleTreasuries.map((t, i) => 
+        handleParallelCall(t.id, prompts[i] || 'Hello', i)
+      )
+    );
+
+    setParallelResults(results.filter(Boolean));
+    setParallelLoading(false);
   };
 
   // ── RENDER ───────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto', padding: 40, background: '#0a0a0a', minHeight: '100vh', color: '#fff' }}>
+    <div style={{ maxWidth: 1100, margin: '0 auto', padding: 40, background: '#0a0a0a', minHeight: '100vh', color: '#fff' }}>
       {/* Header */}
       <div style={{ marginBottom: 32 }}>
         <h1 style={{ fontSize: 36, marginBottom: 4, fontWeight: 800 }}>
-          SEAL
+          OTTER
         </h1>
         <p style={{ color: '#888', fontSize: 14 }}>
-          One API key. Multiple providers. On-chain caps.
+          Autonomous Agent Treasury Protocol. One API key. Multiple agents. On-chain objects.
         </p>
       </div>
 
@@ -475,253 +487,17 @@ const refreshStatus = useCallback(async () => {
         </div>
       )}
 
-      {wallet && status && (
+      {wallet && (
         <div>
-          {/* ── ANOMALY ALERT BANNER ────────────────────────────────────── */}
-         {status.pause?.soft && (
-            <div style={{
-              background: '#331111',
-              border: '1px solid #ff4444',
-              padding: 20,
-              borderRadius: 12,
-              marginBottom: 24,
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <div>
-                  <div style={{ color: '#ff4444', fontWeight: 'bold', fontSize: 18, marginBottom: 4 }}>
-                    🚨 Treasury Paused
-                  </div>
-                  <div style={{ color: '#ff8888', fontSize: 13 }}>
-                    {status.pause.soft.reason}
-                  </div>
-                  <div style={{ color: '#aa6666', fontSize: 12, marginTop: 4 }}>
-                    Paused at: {formatDate(status.pause.soft.pausedAt)}
-                  </div>
-                </div>
-                <button
-                  onClick={handleResume}
-                  disabled={resumeLoading}
-                  style={{
-                    padding: '12px 24px',
-                    fontSize: 14,
-                    fontWeight: 'bold',
-                    background: resumeLoading ? '#333' : '#ff4444',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: 8,
-                    cursor: resumeLoading ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  {resumeLoading ? 'Resuming...' : '▶ Resume Treasury'}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* ── WALLET CARD ─────────────────────────────────────────────── */}
+          {/* ── CREATE MASTER TREASURY ──────────────────────────────────── */}
           <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-              <div>
-                <h2 style={{ fontSize: 20, marginBottom: 8 }}>Wallet</h2>
-                <p style={{ fontFamily: 'monospace', fontSize: 13, color: '#aaa' }}>
-                  {wallet}
-                </p>
-              </div>
-              {status.pause.onChain && (
-                <span style={{
-                  background: '#ff4444',
-                  color: '#fff',
-                  padding: '4px 12px',
-                  borderRadius: 4,
-                  fontSize: 12,
-                  fontWeight: 'bold',
-                }}>
-                  ON-CHAIN PAUSED
-                </span>
-              )}
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
-              <div style={{ background: '#1a1a1a', padding: 16, borderRadius: 8 }}>
-                <div style={{ color: '#888', fontSize: 11, textTransform: 'uppercase', marginBottom: 4 }}>Balance</div>
-                <div style={{ fontSize: 28, fontWeight: 'bold', color: '#00d4aa' }}>
-                  {formatSui(status.balance)} <span style={{ fontSize: 14, color: '#888' }}>SUI</span>
-                </div>
-              </div>
-              <div style={{ background: '#1a1a1a', padding: 16, borderRadius: 8 }}>
-                <div style={{ color: '#888', fontSize: 11, textTransform: 'uppercase', marginBottom: 4 }}>Daily Spent</div>
-                <div style={{ fontSize: 28, fontWeight: 'bold' }}>
-                  {formatSui(status.spent.daily)} <span style={{ fontSize: 14, color: '#888' }}>/ {formatSui(status.caps.daily)}</span>
-                </div>
-              </div>
-              <div style={{ background: '#1a1a1a', padding: 16, borderRadius: 8 }}>
-                <div style={{ color: '#888', fontSize: 11, textTransform: 'uppercase', marginBottom: 4 }}>Pending Settlement</div>
-                <div style={{ fontSize: 28, fontWeight: 'bold', color: '#ffaa00' }}>
-                  {formatSui(status.spent.pending)} <span style={{ fontSize: 14, color: '#888' }}>SUI</span>
-                </div>
-              </div>
-            </div>
-
-            <div style={{ marginTop: 16, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <div style={{ background: '#1a1a1a', padding: '8px 12px', borderRadius: 6, fontSize: 12 }}>
-                <span style={{ color: '#888' }}>Monthly: </span>
-                <span style={{ color: '#fff' }}>{formatSui(status.spent.monthly)} / {formatSui(status.caps.monthly)} SUI</span>
-              </div>
-              <div style={{ background: '#1a1a1a', padding: '8px 12px', borderRadius: 6, fontSize: 12 }}>
-                <span style={{ color: '#888' }}>Reserved: </span>
-                <span style={{ color: '#fff' }}>{formatSui(status.spent.reserved)} SUI</span>
-              </div>
-              <div style={{ background: '#1a1a1a', padding: '8px 12px', borderRadius: 6, fontSize: 12 }}>
-                <span style={{ color: '#888' }}>Velocity: </span>
-                <span style={{ color: status.velocity.currentRate > status.velocity.threshold ? '#ff4444' : '#00d4aa' }}>
-                  {status.velocity.currentRate} / {status.velocity.threshold} req/min
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* ── SETUP BUTTON ────────────────────────────────────────────── */}
-          <div style={{ marginBottom: 24 }}>
-            <button
-              onClick={handleSetupTreasury}
-              disabled={setupLoading}
-              style={{
-                width: '100%',
-                padding: '18px 24px',
-                fontSize: 16,
-                fontWeight: 'bold',
-                background: setupLoading ? '#333' : '#00d4aa',
-                color: '#000',
-                border: 'none',
-                borderRadius: 8,
-                cursor: setupLoading ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {setupLoading ? 'Building PTB...' : '⚡ Setup Treasury (Deposit + Caps PTB)'}
-            </button>
-            <p style={{ color: '#666', fontSize: 12, marginTop: 8 }}>
-              Deposits 0.05 SUI and sets daily/monthly caps, provider caps, and alert threshold in a single PTB.
-            </p>
-          </div>
-
-          {/* ── DEPOSIT (Standalone) ────────────────────────────────────── */}
-          <div style={{ marginBottom: 24 }}>
-            <button
-              onClick={handleDeposit}
-              disabled={depositLoading}
-              style={{
-                width: '100%',
-                padding: '14px 24px',
-                fontSize: 15,
-                fontWeight: 'bold',
-                background: depositLoading ? '#333' : '#0066cc',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 8,
-                cursor: depositLoading ? 'not-allowed' : 'pointer',
-                marginBottom: 8,
-              }}
-            >
-              {depositLoading ? 'Building PTB...' : '💰 Deposit to Treasury (PTB)'}
-            </button>
-            <p style={{ color: '#666', fontSize: 12 }}>
-              Add funds to your existing treasury. Uses your wallet to sign the transaction.
-            </p>
-          </div>
-
-          {/* ── PROVIDERS ───────────────────────────────────────────────── */}
-     {/* ── PROVIDERS ───────────────────────────────────────────────── */}
-          <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24 }}>
-            <h2 style={{ fontSize: 18, marginBottom: 16 }}>🔌 Providers</h2>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {Object.entries(providers).map(([name, info]) => (
-                <div key={name} style={{ background: '#1a1a1a', borderRadius: 10, overflow: 'hidden' }}>
-                  {/* Provider header */}
-                  <div style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    padding: '12px 16px',
-                    borderBottom: '1px solid #222',
-                  }}>
-                    <div style={{ fontWeight: 'bold', fontSize: 15, textTransform: 'capitalize' }}>{name}</div>
-                    <span style={{
-                      padding: '4px 12px',
-                      borderRadius: 4,
-                      fontSize: 12,
-                      fontWeight: 'bold',
-                      background: info.configured ? '#004d33' : '#4d3300',
-                      color: info.configured ? '#00d4aa' : '#ffaa00',
-                    }}>
-                      {info.configured ? '● LIVE' : '○ STUB'}
-                    </span>
-                  </div>
-                  {/* Model list */}
-                  <div style={{ padding: '8px 0' }}>
-                    {Object.entries(info.models).map(([model, modelInfo]) => (
-                      <div key={model} style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '8px 16px',
-                        cursor: info.configured ? 'pointer' : 'default',
-                        transition: 'background 0.15s',
-                      }}
-                        onMouseEnter={e => (e.currentTarget.style.background = '#222')}
-                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                        onClick={() => {
-                          if (info.configured) {
-                            setSelectedModel(model);
-                          }
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          {info.configured && selectedModel === model && (
-                            <span style={{ color: '#00d4aa', fontSize: 12 }}>✓</span>
-                          )}
-                          {(!info.configured || selectedModel !== model) && (
-                            <span style={{ width: 16, display: 'inline-block' }} />
-                          )}
-                          <span style={{
-                            fontFamily: 'monospace',
-                            fontSize: 12,
-                            color: info.configured ? '#fff' : '#666',
-                          }}>
-                            {model}
-                          </span>
-                          {!info.configured && (
-                            <span style={{
-                              fontSize: 10,
-                              color: '#555',
-                              background: '#2a2a2a',
-                              padding: '2px 6px',
-                              borderRadius: 3,
-                            }}>
-                              stub
-                            </span>
-                          )}
-                        </div>
-                        <span style={{ fontSize: 11, color: '#666', fontFamily: 'monospace' }}>
-                          {(modelInfo.costPer1kTokens / 1e9).toFixed(6)} SUI / 1K tokens
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* ── API KEYS ────────────────────────────────────────────────── */}
-          <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24 }}>
-            <h2 style={{ fontSize: 18, marginBottom: 16 }}>🔑 API Keys</h2>
-
-            <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+            <h2 style={{ fontSize: 18, marginBottom: 16 }}>🏦 Create Master Treasury</h2>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
               <input
                 type="text"
-                placeholder="Key label (e.g., Production Agent)"
-                value={newKeyLabel}
-                onChange={(e) => setNewKeyLabel(e.target.value)}
+                placeholder="Treasury name"
+                value={newTreasuryName}
+                onChange={(e) => setNewTreasuryName(e.target.value)}
                 style={{
                   flex: 1,
                   minWidth: 200,
@@ -733,90 +509,226 @@ const refreshStatus = useCallback(async () => {
                   fontSize: 13,
                 }}
               />
-              <label style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '0 12px',
-                background: '#1a1a1a',
-                border: '1px solid #333',
-                borderRadius: 6,
-                fontSize: 12,
-                color: '#888',
-                cursor: 'pointer',
-              }}>
-                <input
-                  type="checkbox"
-                  checked={allowKeyResume}
-                  onChange={(e) => setAllowKeyResume(e.target.checked)}
-                  style={{ cursor: 'pointer' }}
-                />
-                Allow resume
-              </label>
+              <input
+                type="number"
+                placeholder="Deposit (SUI)"
+                value={newTreasuryDeposit}
+                onChange={(e) => setNewTreasuryDeposit(e.target.value)}
+                step="0.01"
+                min="0.001"
+                style={{
+                  width: 120,
+                  padding: 10,
+                  background: '#1a1a1a',
+                  border: '1px solid #333',
+                  borderRadius: 6,
+                  color: '#fff',
+                  fontSize: 13,
+                }}
+              />
               <button
-                onClick={handleCreateKey}
-                disabled={keyLoading}
+                onClick={handleCreateTreasury}
+                disabled={loading.createTreasury}
                 style={{
                   padding: '10px 20px',
                   fontSize: 14,
                   fontWeight: 'bold',
-                  background: keyLoading ? '#333' : '#00d4aa',
+                  background: loading.createTreasury ? '#333' : '#00d4aa',
                   color: '#000',
                   border: 'none',
                   borderRadius: 6,
-                  cursor: keyLoading ? 'not-allowed' : 'pointer',
+                  cursor: loading.createTreasury ? 'not-allowed' : 'pointer',
                 }}
               >
-                {keyLoading ? 'Creating...' : 'Generate Key'}
+                {loading.createTreasury ? 'Creating...' : 'Create Treasury'}
               </button>
             </div>
+            <p style={{ color: '#666', fontSize: 12 }}>
+              Creates a shared Sui object with your deposit. You get a TreasuryOwnerCap.
+            </p>
+          </div>
 
-            {newKey && (
-              <div style={{
-                background: '#0a2a1a',
-                border: '1px solid #00d4aa',
-                padding: 16,
-                borderRadius: 8,
-                marginBottom: 16,
-              }}>
-                <div style={{ color: '#00d4aa', fontWeight: 'bold', marginBottom: 8 }}>
-                  🔐 API Key Created — Copy this now!
-                </div>
-                <div style={{
-                  fontFamily: 'monospace',
-                  fontSize: 13,
-                  background: '#0a0a0a',
-                  padding: 12,
-                  borderRadius: 6,
-                  wordBreak: 'break-all',
-                  color: '#fff',
-                }}>
-                  {newKey}
-                </div>
+          {/* ── TREASURY TREE ─────────────────────────────────────────── */}
+          <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24 }}>
+            <h2 style={{ fontSize: 18, marginBottom: 16 }}>🌳 Agent Treasury Tree</h2>
+            
+            {treasuries.length === 0 ? (
+              <p style={{ color: '#888' }}>No treasuries yet. Create one above.</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {treasuries.map((master) => (
+                  <TreasuryTreeNode
+                    key={master.id}
+                    node={master}
+                    onSpawn={setSpawnParentId}
+                    onReclaim={handleReclaimChild}
+                    onCreateKey={handleCreateKey}
+                    onSelect={setSelectedTreasury}
+                    selected={selectedTreasury}
+                    loading={loading}
+                    newKey={newKey}
+                    copiedKey={copiedKey}
+                    setCopiedKey={setCopiedKey}
+                    apiKeys={apiKeys}
+                    newKeyLabel={newKeyLabel}
+                    setNewKeyLabel={setNewKeyLabel}
+                    allowKeyResume={allowKeyResume}
+                    setAllowKeyResume={setAllowKeyResume}
+                    setNewKey={setNewKey}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── SPAWN CHILD MODAL (inline) ────────────────────────────── */}
+          {spawnParentId && (
+            <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24, border: '1px solid #00d4aa33' }}>
+              <h3 style={{ fontSize: 16, marginBottom: 12, color: '#00d4aa' }}>
+                Spawn Child Agent from {spawnParentId.slice(0, 16)}...
+              </h3>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+                <input
+                  type="text"
+                  placeholder="Agent name"
+                  value={spawnName}
+                  onChange={(e) => setSpawnName(e.target.value)}
+                  style={{ flex: 1, minWidth: 150, padding: 10, background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, color: '#fff', fontSize: 13 }}
+                />
+                <input
+                  type="number"
+                  placeholder="Budget (SUI)"
+                  value={spawnBudget}
+                  onChange={(e) => setSpawnBudget(e.target.value)}
+                  step="0.001"
+                  style={{ width: 100, padding: 10, background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, color: '#fff', fontSize: 13 }}
+                />
+                <input
+                  type="number"
+                  placeholder="Daily cap (MIST)"
+                  value={spawnDailyCap}
+                  onChange={(e) => setSpawnDailyCap(e.target.value)}
+                  style={{ width: 120, padding: 10, background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, color: '#fff', fontSize: 13 }}
+                />
                 <button
-                  onClick={() => {
-                    copyToClipboard(newKey);
-                    setCopiedKey(newKey);
-                    setTimeout(() => setCopiedKey(null), 2000);
-                  }}
+                  onClick={handleSpawnChild}
+                  disabled={loading.spawnChild}
                   style={{
-                    marginTop: 8,
-                    padding: '6px 12px',
-                    fontSize: 12,
-                    background: '#00d4aa',
+                    padding: '10px 20px',
+                    fontSize: 14,
+                    fontWeight: 'bold',
+                    background: loading.spawnChild ? '#333' : '#00d4aa',
                     color: '#000',
                     border: 'none',
-                    borderRadius: 4,
+                    borderRadius: 6,
+                    cursor: loading.spawnChild ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {loading.spawnChild ? 'Spawning...' : 'Spawn Agent'}
+                </button>
+                <button
+                  onClick={() => setSpawnParentId('')}
+                  style={{
+                    padding: '10px 16px',
+                    fontSize: 14,
+                    background: '#333',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 6,
                     cursor: 'pointer',
                   }}
                 >
-                  {copiedKey === newKey ? '✓ Copied!' : 'Copy to Clipboard'}
+                  Cancel
                 </button>
               </div>
-            )}
+            </div>
+          )}
 
+          {/* ── PARALLEL DEMO ─────────────────────────────────────────── */}
+          <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24 }}>
+            <h2 style={{ fontSize: 18, marginBottom: 16 }}>⚡ Parallel Agent Execution</h2>
+            <p style={{ color: '#888', fontSize: 12, marginBottom: 12 }}>
+              Fire prompts to multiple agents simultaneously. Each agent spends from its own object-held balance.
+            </p>
+            
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+              {[prompt1, prompt2, prompt3].map((p, i) => (
+                <div key={i}>
+                  <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
+                    Agent {i + 1} {i < treasuries.flatMap(t => [t, ...t.children]).length ? '✓' : '—'}
+                  </div>
+                  <textarea
+                    value={i === 0 ? prompt1 : i === 1 ? prompt2 : prompt3}
+                    onChange={(e) => i === 0 ? setPrompt1(e.target.value) : i === 1 ? setPrompt2(e.target.value) : setPrompt3(e.target.value)}
+                    placeholder={`Prompt for agent ${i + 1}...`}
+                    rows={2}
+                    style={{
+                      width: '100%',
+                      padding: 8,
+                      background: '#1a1a1a',
+                      border: '1px solid #333',
+                      borderRadius: 6,
+                      color: '#fff',
+                      fontSize: 13,
+                      resize: 'vertical',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={handleExecuteAll}
+              disabled={parallelLoading}
+              style={{
+                padding: '12px 24px',
+                fontSize: 16,
+                fontWeight: 'bold',
+                background: parallelLoading ? '#333' : '#00d4aa',
+                color: '#000',
+                border: 'none',
+                borderRadius: 8,
+                cursor: parallelLoading ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {parallelLoading ? 'Executing...' : 'Execute All Agents'}
+            </button>
+
+            {parallelResults.length > 0 && (
+              <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+                {parallelResults.map((result, i) => (
+                  <div key={i} style={{
+                    padding: 12,
+                    background: '#1a1a1a',
+                    borderRadius: 8,
+                    border: result.error ? '1px solid #ff4444' : '1px solid #00d4aa33',
+                  }}>
+                    <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Agent {result.index + 1}</div>
+                    {result.error ? (
+                      <div style={{ color: '#ff4444', fontSize: 12 }}>{result.error}</div>
+                    ) : (
+                      <div>
+                        <div style={{ color: '#00d4aa', fontSize: 12, marginBottom: 4 }}>✓ Success</div>
+                        <div style={{ fontSize: 12, color: '#ccc', lineHeight: 1.4 }}>
+                          {result.content?.slice(0, 100)}...
+                        </div>
+                        <div style={{ fontSize: 10, color: '#666', marginTop: 4 }}>
+                          Cost: {result.cost?.actual} MIST
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── API KEYS ────────────────────────────────────────────────── */}
+          <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24 }}>
+            <h2 style={{ fontSize: 18, marginBottom: 16 }}>🔑 API Keys</h2>
             {apiKeys.length === 0 ? (
-              <p style={{ color: '#888' }}>No API keys yet</p>
+              <p style={{ color: '#888' }}>No API keys yet. Create one from a treasury node.</p>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {apiKeys.map((k, i) => (
@@ -834,8 +746,8 @@ const refreshStatus = useCallback(async () => {
                         {k.key.slice(0, 24)}...
                       </div>
                       <div style={{ color: '#888', fontSize: 11, marginTop: 2 }}>
-                        {k.label}
-                        {k.allowApiKeyResume && <span style={{ color: '#00d4aa', marginLeft: 8 }}>● Can resume</span>}
+                        {k.label} • {k.treasuryId.slice(0, 16)}...
+                        {k.allowResume && <span style={{ color: '#00d4aa', marginLeft: 8 }}>● Can resume</span>}
                         {k.revoked && <span style={{ color: '#ff4444', marginLeft: 8 }}>● Revoked</span>}
                       </div>
                     </div>
@@ -850,171 +762,217 @@ const refreshStatus = useCallback(async () => {
             <div style={{ marginTop: 16, padding: 12, background: '#0a0a0a', borderRadius: 6 }}>
               <div style={{ color: '#888', fontSize: 12, marginBottom: 8 }}>Example usage:</div>
               <code style={{ fontSize: 11, color: '#00d4aa', fontFamily: 'monospace', display: 'block', whiteSpace: 'pre-wrap' }}>
-                {`curl -X POST ${GATEWAY_URL}/v1/chat \
-  -H "Authorization: Bearer seal_..." \
-  -H "Content-Type: application/json" \
+                {`curl -X POST ${GATEWAY_URL}/v1/chat \\
+  -H "Authorization: Bearer otter_..." \\
+  -H "Content-Type: application/json" \\
   -d '{"model":"llama-3.1-8b-instant","messages":[{"role":"user","content":"Hello"}]}'`}
               </code>
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
-          {/* ── API CALL DEMO ───────────────────────────────────────────── */}
-          <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24 }}>
-            <h2 style={{ fontSize: 18, marginBottom: 16 }}>🤖 API Call Demo</h2>
+// ── TREASURY TREE NODE COMPONENT ───────────────────────────────────────────
 
-           <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Selected model:</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{
-                  fontFamily: 'monospace',
-                  fontSize: 13,
-                  color: '#00d4aa',
-                  background: '#0a2a1a',
-                  border: '1px solid #00d4aa33',
-                  padding: '6px 12px',
-                  borderRadius: 6,
-                }}>
-                  {selectedModel}
-                </span>
-                <span style={{ fontSize: 12, color: '#666' }}>
-                  — pick a model from the Providers section above
-                </span>
-              </div>
+function TreasuryTreeNode({
+  node,
+  onSpawn,
+  onReclaim,
+  onCreateKey,
+  onSelect,
+  selected,
+  loading,
+  newKey,
+  copiedKey,
+  setCopiedKey,
+  apiKeys,
+  newKeyLabel,
+  setNewKeyLabel,
+  allowKeyResume,
+  setAllowKeyResume,
+  setNewKey,
+}: {
+  node: TreasuryNode;
+  onSpawn: (id: string) => void;
+  onReclaim: (parentId: string, childId: string) => void;
+  onCreateKey: (treasuryId: string) => void;
+  onSelect: (id: string) => void;
+  selected: string | null;
+  loading: Record<string, boolean>;
+  newKey: string | null;
+  copiedKey: string | null;
+  setCopiedKey: (k: string | null) => void;
+  apiKeys: ApiKeyRecord[];
+  newKeyLabel: string;
+  setNewKeyLabel: (s: string) => void;
+  allowKeyResume: boolean;
+  setAllowKeyResume: (b: boolean) => void;
+  setNewKey: (k: string | null) => void;
+}) {
+  const isSelected = selected === node.id;
+  const nodeKeys = apiKeys.filter(k => k.treasuryId === node.id && !k.revoked);
+  const isChild = !!node.parent;
+
+  return (
+    <div style={{
+      marginLeft: isChild ? 24 : 0,
+      borderLeft: isChild ? '2px solid #333' : 'none',
+      paddingLeft: isChild ? 12 : 0,
+    }}>
+      <div
+        onClick={() => onSelect(isSelected ? null : node.id)}
+        style={{
+          background: isSelected ? '#1a2a1a' : '#1a1a1a',
+          border: isSelected ? '1px solid #00d4aa' : '1px solid #222',
+          padding: 16,
+          borderRadius: 10,
+          cursor: 'pointer',
+          transition: 'all 0.15s',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+          <div>
+            <div style={{ fontWeight: 'bold', fontSize: 15, display: 'flex', alignItems: 'center', gap: 8 }}>
+              {isChild ? '🤖' : '🏦'} {node.name}
+              {node.paused && <span style={{ background: '#ff4444', color: '#fff', padding: '2px 8px', borderRadius: 4, fontSize: 10 }}>PAUSED</span>}
             </div>
+            <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#666', marginTop: 4 }}>
+              {node.id}
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 24, fontWeight: 'bold', color: '#00d4aa' }}>
+              {formatSui(node.balance)} <span style={{ fontSize: 12, color: '#888' }}>SUI</span>
+            </div>
+            <a
+              href={`${SUI_SCAN}/${node.id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ fontSize: 11, color: '#00d4aa', textDecoration: 'none' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              View on SuiScan →
+            </a>
+          </div>
+        </div>
 
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Type a prompt..."
-              rows={3}
+        {/* Actions */}
+        <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+          {!isChild && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onSpawn(node.id); }}
               style={{
-                width: '100%',
-                padding: 12,
-                background: '#1a1a1a',
-                border: '1px solid #333',
-                borderRadius: 8,
-                color: '#fff',
-                fontFamily: 'system-ui, sans-serif',
-                fontSize: 14,
-                resize: 'vertical',
-                boxSizing: 'border-box',
+                padding: '6px 12px',
+                fontSize: 12,
+                background: '#00d4aa',
+                color: '#000',
+                border: 'none',
+                borderRadius: 4,
+                cursor: 'pointer',
+                fontWeight: 'bold',
               }}
-            />
+            >
+              + Spawn Child
+            </button>
+          )}
+          {isChild && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onReclaim(node.parent!, node.id); }}
+              disabled={loading[`reclaim_${node.id}`]}
+              style={{
+                padding: '6px 12px',
+                fontSize: 12,
+                background: loading[`reclaim_${node.id}`] ? '#333' : '#ff4444',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 4,
+                cursor: loading[`reclaim_${node.id}`] ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {loading[`reclaim_${node.id}`] ? 'Reclaiming...' : '↩ Reclaim'}
+            </button>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); onCreateKey(node.id); }}
+            disabled={loading[`key_${node.id}`]}
+            style={{
+              padding: '6px 12px',
+              fontSize: 12,
+              background: loading[`key_${node.id}`] ? '#333' : '#0066cc',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 4,
+              cursor: loading[`key_${node.id}`] ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {loading[`key_${node.id}`] ? 'Creating...' : '🔑 Create Key'}
+          </button>
+        </div>
 
-            <div style={{ marginTop: 12, display: 'flex', gap: 12, alignItems: 'center' }}>
-              <button
-                onClick={handleApiCall}
-                disabled={apiLoading || !prompt.trim()}
-                style={{
-                  padding: '12px 24px',
-                  fontSize: 16,
-                  fontWeight: 'bold',
-                  background: apiLoading ? '#333' : '#00d4aa',
-                  color: '#000',
-                  border: 'none',
-                  borderRadius: 8,
-                  cursor: apiLoading || !prompt.trim() ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {apiLoading ? 'Processing...' : '⚡ Pay & Call AI'}
-              </button>
-              <span style={{ color: '#888', fontSize: 14 }}>
-                Uses your active API key
-              </span>
+        {/* API Key Creation UI */}
+        {isSelected && (
+          <div style={{ marginTop: 12, padding: 12, background: '#0a0a0a', borderRadius: 6 }}>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+              <input
+                type="text"
+                placeholder="Key label"
+                value={newKeyLabel}
+                onChange={(e) => setNewKeyLabel(e.target.value)}
+                style={{ flex: 1, padding: 8, background: '#1a1a1a', border: '1px solid #333', borderRadius: 4, color: '#fff', fontSize: 12 }}
+              />
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#888' }}>
+                <input type="checkbox" checked={allowKeyResume} onChange={(e) => setAllowKeyResume(e.target.checked)} />
+                Allow resume
+              </label>
             </div>
-
-            {apiResponse && (
-              <div style={{
-                marginTop: 16,
-                padding: 16,
-                background: '#1a1a1a',
-                borderRadius: 8,
-                border: apiResponse.error ? '1px solid #ff4444' : '1px solid #333',
-              }}>
-                {apiResponse.error ? (
-                  <div>
-                    <div style={{ color: '#ff4444', fontWeight: 'bold', marginBottom: 8 }}>
-                      Error
-                    </div>
-                    <div style={{ fontSize: 14, color: '#ff8888' }}>
-                      {apiResponse.error}
-                    </div>
-                    {apiResponse.details && (
-                      <div style={{ fontSize: 12, color: '#aa6666', marginTop: 4 }}>
-                        {apiResponse.details}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div>
-                    <div style={{ color: '#00d4aa', fontWeight: 'bold', marginBottom: 8 }}>
-                      Response
-                    </div>
-                    <div style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
-                      {apiResponse.content}
-                    </div>
-                    {apiResponse.cost && (
-                      <div style={{
-                        marginTop: 12,
-                        padding: 12,
-                        background: '#0a0a0a',
-                        borderRadius: 6,
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                        color: '#888',
-                      }}>
-                        <div>Model: {apiResponse.model}</div>
-                        <div>Cost: {apiResponse.cost.actual} MIST (est: {apiResponse.cost.estimated})</div>
-                        <div>Tokens: {apiResponse.usage?.total_tokens || 'N/A'}</div>
-                        <div>Pending settlement: {apiResponse.settlement?.pending} MIST</div>
-                      </div>
-                    )}
-                  </div>
-                )}
+            {newKey && nodeKeys.length === 0 && (
+              <div style={{ background: '#0a2a1a', border: '1px solid #00d4aa', padding: 12, borderRadius: 6 }}>
+                <div style={{ color: '#00d4aa', fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>🔐 API Key Created</div>
+                <div style={{ fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all', color: '#fff' }}>{newKey}</div>
+                <button
+                  onClick={() => { copyToClipboard(newKey!); setCopiedKey(newKey); setTimeout(() => setCopiedKey(null), 2000); }}
+                  style={{ marginTop: 8, padding: '4px 8px', fontSize: 11, background: '#00d4aa', color: '#000', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+                >
+                  {copiedKey === newKey ? '✓ Copied!' : 'Copy'}
+                </button>
+              </div>
+            )}
+            {nodeKeys.length > 0 && (
+              <div style={{ fontSize: 11, color: '#888' }}>
+                {nodeKeys.length} active key{nodeKeys.length > 1 ? 's' : ''}
               </div>
             )}
           </div>
+        )}
+      </div>
 
-          {/* ── RECENT EVENTS ───────────────────────────────────────────── */}
-          <div style={{ background: '#111', padding: 24, borderRadius: 12 }}>
-            <h2 style={{ fontSize: 18, marginBottom: 16 }}>📋 Recent Events</h2>
-
-            {events.length === 0 ? (
-              <p style={{ color: '#888' }}>No events found</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {events.slice(0, 15).map((e, i) => (
-                  <div key={i} style={{
-                    padding: 12,
-                    background: '#1a1a1a',
-                    borderRadius: 8,
-                    fontSize: 13,
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ color: '#00d4aa', fontWeight: 'bold' }}>
-                        {e.type?.split('::').pop() || 'Event'}
-                      </span>
-                      <span style={{ color: '#666', fontSize: 11 }}>
-                        {e.timestampMs ? formatDate(e.timestampMs) : 'Unknown'}
-                      </span>
-                    </div>
-                    <div style={{ color: '#888', fontFamily: 'monospace', fontSize: 11, marginTop: 4 }}>
-                      {e.id?.txDigest?.slice(0, 20)}...
-                    </div>
-                    {e.parsedJson && (
-                      <div style={{ color: '#666', fontSize: 11, marginTop: 4 }}>
-                        {Object.entries(e.parsedJson)
-                          .filter(([k]) => !['timestamp', 'wallet_call_number'].includes(k))
-                          .slice(0, 4)
-                          .map(([k, v]) => `${k}: ${String(v).slice(0, 40)}`)
-                          .join(' | ')}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+      {/* Children */}
+      {node.children && node.children.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          {node.children.map(child => (
+            <TreasuryTreeNode
+              key={child.id}
+              node={child}
+              onSpawn={onSpawn}
+              onReclaim={onReclaim}
+              onCreateKey={onCreateKey}
+              onSelect={onSelect}
+              selected={selected}
+              loading={loading}
+              newKey={newKey}
+              copiedKey={copiedKey}
+              setCopiedKey={setCopiedKey}
+              apiKeys={apiKeys}
+              newKeyLabel={newKeyLabel}
+              setNewKeyLabel={setNewKeyLabel}
+              allowKeyResume={allowKeyResume}
+              setAllowKeyResume={setAllowKeyResume}
+              setNewKey={setNewKey}
+            />
+          ))}
         </div>
       )}
     </div>

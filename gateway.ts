@@ -1,3 +1,7 @@
+// otter-gateway.ts
+// Otter v0.3 — Autonomous Agent Treasury Protocol
+// Gateway: provider routing, per-agent settlement, velocity tracking
+
 import express from 'express';
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
@@ -7,8 +11,6 @@ import cors from 'cors';
 import crypto from 'crypto';
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import { startIndexer, getEventsForWallet, getEventsByType, getAllEvents, getStats } from './indexer';
-import { x402ProviderMiddleware } from './provider-adapter';
 
 dotenv.config();
 
@@ -20,26 +22,21 @@ app.use(cors({ origin: '*' }));
 
 const client = new SuiClient({ url: process.env.SUI_RPC || getFullnodeUrl('testnet') });
 
-const PACKAGE = process.env.PACKAGE_ID!;
-const POOL = process.env.POOL_ID!;
+const PACKAGE = process.env.PACKAGE_ID!;        // Otter package ID
 const GATEWAY_ADDR = process.env.GATEWAY_ADDRESS!;
 const gatewayKeypair = Ed25519Keypair.fromSecretKey(process.env.GATEWAY_PRIVATE_KEY!);
 const PORT = process.env.PORT || '3001';
 
 // ── DATA DIRECTORY ────────────────────────────────────────────────────────
-// All persistent state lives in ./data/ so it's inspectable and survives restart
 
 const DATA_DIR = join(process.cwd(), 'data');
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 
 const API_KEYS_FILE = join(DATA_DIR, 'api-keys.json');
-const LEDGER_FILE = join(DATA_DIR, 'credit-ledger.json');
-const PAUSED_FILE = join(DATA_DIR, 'paused-wallets.json');
-const CONSUMED_DIGESTS_FILE = join(DATA_DIR, 'consumed-digests.json');
+const LEDGER_FILE = join(DATA_DIR, 'agent-ledger.json');
+const PAUSED_FILE = join(DATA_DIR, 'paused-agents.json');
 
 // ── PROVIDER CONFIGURATION ─────────────────────────────────────────────────
-// Hardcoded rates. Restart gateway to update. Measured in MIST per 1K tokens.
-// These are DEMO RATES — not real provider pricing. Adjust as needed.
 
 interface ModelConfig {
   costPer1kTokens: number;  // in MIST
@@ -56,9 +53,9 @@ const PROVIDERS: Record<string, ProviderConfig> = {
     baseUrl: 'https://api.groq.com/openai/v1',
     apiKeyEnvVar: 'GROQ_API_KEY',
     models: {
-      'llama-3.1-8b-instant': { costPer1kTokens: 50_000 },      // ~$0.00015 per 1K
-      'llama-3.3-70b-versatile': { costPer1kTokens: 200_000 },  // ~$0.0006 per 1K
-      'mixtral-8x7b-32768': { costPer1kTokens: 120_000 },       // ~$0.00036 per 1K
+      'llama-3.1-8b-instant': { costPer1kTokens: 50_000 },
+      'llama-3.3-70b-versatile': { costPer1kTokens: 200_000 },
+      'mixtral-8x7b-32768': { costPer1kTokens: 120_000 },
     },
   },
   openai: {
@@ -80,7 +77,6 @@ const PROVIDERS: Record<string, ProviderConfig> = {
   },
 };
 
-// Helper: find provider for a given model
 function getProviderForModel(model: string): { provider: string; config: ProviderConfig; modelConfig: ModelConfig } | null {
   for (const [providerName, providerConfig] of Object.entries(PROVIDERS)) {
     if (providerConfig.models[model]) {
@@ -90,7 +86,6 @@ function getProviderForModel(model: string): { provider: string; config: Provide
   return null;
 }
 
-// Helper: calculate cost in MIST from token count
 function calculateCost(model: string, tokenCount: number): bigint {
   const info = getProviderForModel(model);
   if (!info) return 0n;
@@ -116,16 +111,17 @@ function saveJson<T>(path: string, data: T) {
 
 // ── API KEY STORE ──────────────────────────────────────────────────────────
 
-interface ApiKeyRecord {
-  wallet: string;
+interface AgentApiKey {
+  wallet: string;           // ultimate owner address
+  treasuryId: string;       // the AgentTreasury object ID this key controls
   label: string;
   createdAt: number;
   revoked: boolean;
-  allowApiKeyResume: boolean;  // If true, API key can resume a paused wallet
+  allowResume: boolean;
 }
 
-const apiKeys = new Map<string, ApiKeyRecord>(
-  Object.entries(loadJson<Record<string, ApiKeyRecord>>(API_KEYS_FILE, {}))
+const apiKeys = new Map<string, AgentApiKey>(
+  Object.entries(loadJson<Record<string, AgentApiKey>>(API_KEYS_FILE, {}))
 );
 
 function persistApiKeys() {
@@ -134,36 +130,36 @@ function persistApiKeys() {
 
 function generateApiKey(): string {
   const random = crypto.randomBytes(24).toString('base64url');
-  return `seal_${random}`;
+  return `otter_${random}`;
 }
 
-// ── CREDIT LEDGER ─────────────────────────────────────────────────────────
-// Tracks off-chain credits per wallet. Settled to chain every 5 minutes.
+// ── PER-AGENT CREDIT LEDGER ───────────────────────────────────────────────
 
-interface LedgerEntry {
+interface AgentLedger {
+  treasuryId: string;
   reserved: bigint;
   spent: bigint;
   lastSettlement: number;
-  settlementFailures: number;  // NEW: track consecutive failures
+  settlementFailures: number;
 }
 
-const creditLedger = new Map<string, LedgerEntry>(
-  Object.entries(loadJson<Record<string, LedgerEntry>>(LEDGER_FILE, {})).map(([k, v]) => [
+const agentLedger = new Map<string, AgentLedger>(
+  Object.entries(loadJson<Record<string, AgentLedger>>(LEDGER_FILE, {})).map(([k, v]) => [
     k,
     { ...v, reserved: BigInt(v.reserved || 0), spent: BigInt(v.spent || 0) }
   ])
 );
 
 function persistLedger() {
-  saveJson(LEDGER_FILE, Object.fromEntries(creditLedger));
+  saveJson(LEDGER_FILE, Object.fromEntries(agentLedger));
 }
 
-function getOrCreateLedger(wallet: string): LedgerEntry {
-  if (!creditLedger.has(wallet)) {
-    creditLedger.set(wallet, { reserved: 0n, spent: 0n, lastSettlement: Date.now(), settlementFailures: 0 });
+function getOrCreateLedger(treasuryId: string): AgentLedger {
+  if (!agentLedger.has(treasuryId)) {
+    agentLedger.set(treasuryId, { treasuryId, reserved: 0n, spent: 0n, lastSettlement: Date.now(), settlementFailures: 0 });
     persistLedger();
   }
-  return creditLedger.get(wallet)!;
+  return agentLedger.get(treasuryId)!;
 }
 
 // ── SOFT PAUSE STATE ──────────────────────────────────────────────────────
@@ -171,50 +167,45 @@ function getOrCreateLedger(wallet: string): LedgerEntry {
 interface PauseRecord {
   pausedAt: number;
   reason: string;
-  auto: boolean;  // true = triggered by velocity, false = manual
+  auto: boolean;
 }
 
-const pausedWallets = new Map<string, PauseRecord>(
+const pausedAgents = new Map<string, PauseRecord>(
   Object.entries(loadJson<Record<string, PauseRecord>>(PAUSED_FILE, {}))
 );
 
 function persistPaused() {
-  saveJson(PAUSED_FILE, Object.fromEntries(pausedWallets));
+  saveJson(PAUSED_FILE, Object.fromEntries(pausedAgents));
 }
 
 // ── VELOCITY TRACKER ────────────────────────────────────────────────────────
-// Sliding window: tracks request timestamps per wallet. Triggers soft pause
-// if requests exceed threshold within window.
 
-const VELOCITY_WINDOW_MS = 60_000;    // 1 minute window
-const VELOCITY_THRESHOLD = 8;        // 10 requests per minute = spike
-const VELOCITY_BURST_LIMIT = 5;       // 5 requests within 5 seconds = immediate pause
+const VELOCITY_WINDOW_MS = 60_000;
+const VELOCITY_THRESHOLD = 8;
+const VELOCITY_BURST_LIMIT = 5;
 
 interface VelocityWindow {
-  requests: number[];  // timestamps
+  requests: number[];
 }
 
-const velocityWindows = new Map<string, VelocityWindow>();
+const agentVelocityWindows = new Map<string, VelocityWindow>();
 
-function checkVelocity(wallet: string): { triggered: boolean; rate: number; reason: string } {
+function checkVelocity(treasuryId: string): { triggered: boolean; rate: number; reason: string } {
   const now = Date.now();
-  let window = velocityWindows.get(wallet);
+  let window = agentVelocityWindows.get(treasuryId);
   if (!window) {
     window = { requests: [] };
-    velocityWindows.set(wallet, window);
+    agentVelocityWindows.set(treasuryId, window);
   }
 
-  // Remove old requests outside window
   window.requests = window.requests.filter(t => now - t < VELOCITY_WINDOW_MS);
   window.requests.push(now);
 
-  // Check burst: last 5 requests within 5 seconds
   const recent = window.requests.filter(t => now - t < 5_000);
   if (recent.length >= VELOCITY_BURST_LIMIT) {
     return { triggered: true, rate: recent.length, reason: `Burst detected: ${recent.length} requests in 5 seconds` };
   }
 
-  // Check rate
   const rate = window.requests.length;
   if (rate > VELOCITY_THRESHOLD) {
     return { triggered: true, rate, reason: `Velocity spike: ${rate} requests in 1 minute (threshold: ${VELOCITY_THRESHOLD})` };
@@ -223,28 +214,17 @@ function checkVelocity(wallet: string): { triggered: boolean; rate: number; reas
   return { triggered: false, rate, reason: '' };
 }
 
-// ── CONSUMED DIGESTS (x402 replay protection) ──────────────────────────────
-
-const consumedDigests = new Set<string>(
-  loadJson<string[]>(CONSUMED_DIGESTS_FILE, [])
-);
-
-function persistConsumedDigests() {
-  saveJson(CONSUMED_DIGESTS_FILE, Array.from(consumedDigests));
-}
-
 // ── RATE LIMITING ──────────────────────────────────────────────────────────
-// Simple in-memory rate limiting. Per-IP and per-wallet.
 
 interface RateLimitEntry {
   requests: number[];
 }
 
 const ipLimits = new Map<string, RateLimitEntry>();
-const walletLimits = new Map<string, RateLimitEntry>();
+const treasuryLimits = new Map<string, RateLimitEntry>();
 
-const IP_LIMIT = 100;       // requests per minute per IP
-const WALLET_LIMIT = 10;    // requests per minute per wallet (for /v1/chat)
+const IP_LIMIT = 100;
+const TREASURY_LIMIT = 10;
 
 function checkRateLimit(map: Map<string, RateLimitEntry>, key: string, limit: number, windowMs: number = 60_000): boolean {
   const now = Date.now();
@@ -274,7 +254,7 @@ async function callGroq(
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
+    const timeout = setTimeout(() => controller.abort(), 30000);
 
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -315,23 +295,13 @@ async function callAnthropicStub(): Promise<{ error: string }> {
   return { error: 'Anthropic provider not configured. Add ANTHROPIC_API_KEY to enable.' };
 }
 
-// ── X402 CONFIG ───────────────────────────────────────────────────────────
-
-const x402Config = {
-  poolId: POOL,
-  packageId: PACKAGE,
-  gatewayUrl: `http://localhost:${PORT}`,
-  minCost: BigInt(1_000_000),
-  network: 'sui:testnet',
-};
-
 // ── ENDPOINTS ──────────────────────────────────────────────────────────────
 
 // Health check
 app.get('/health', async (_req, res) => {
   res.json({
     status: 'ok',
-    pool: POOL,
+    package: PACKAGE,
     gateway: GATEWAY_ADDR,
     providers: Object.fromEntries(
       Object.entries(PROVIDERS).map(([name, config]) => [
@@ -345,7 +315,7 @@ app.get('/health', async (_req, res) => {
   });
 });
 
-// Get provider list and cost rates (for dashboard)
+// Get provider list and cost rates
 app.get('/providers', async (_req, res) => {
   res.json({
     providers: Object.fromEntries(
@@ -365,189 +335,56 @@ app.get('/providers', async (_req, res) => {
   });
 });
 
-// Check wallet balance (gasless view call)
-app.get('/balance/:wallet', async (req, res) => {
-  const wallet = req.params.wallet;
+// ── AGENT TREASURY MANAGEMENT ─────────────────────────────────────────────
 
-  // Rate limit by wallet
-  if (!checkRateLimit(walletLimits, wallet, 60)) {
-    return res.status(429).json({ error: 'Rate limit exceeded. Max 60 balance checks per minute.' });
-  }
-
-  try {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${PACKAGE}::seal_api_pool::get_balance`,
-      arguments: [tx.object(POOL), tx.pure.address(wallet)],
-    });
-
-    const result = await client.devInspectTransactionBlock({
-      transactionBlock: tx,
-      sender: GATEWAY_ADDR,
-    });
-
-    const returnValues = result.results?.[0]?.returnValues;
-    if (!returnValues || !returnValues[0]) {
-      return res.json({ wallet, balance: '0' });
-    }
-
-    const bytes = new Uint8Array(returnValues[0][0]);
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const balance = view.getBigUint64(0, true);
-
-    return res.json({ wallet, balance: balance.toString() });
-  } catch (err) {
-    console.error('Balance error:', err);
-    return res.status(500).json({ wallet, balance: '0', error: 'Failed to fetch balance' });
-  }
-});
-
-// Get wallet status: balance, pause state, velocity, ledger
-app.get('/status/:wallet', async (req, res) => {
-  const wallet = req.params.wallet;
-
-  try {
-    // On-chain balance
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${PACKAGE}::seal_api_pool::get_balance`,
-      arguments: [tx.object(POOL), tx.pure.address(wallet)],
-    });
-
-    const balanceResult = await client.devInspectTransactionBlock({
-      transactionBlock: tx,
-      sender: GATEWAY_ADDR,
-    });
-
-    let balance = 0n;
-    const returnValues = balanceResult.results?.[0]?.returnValues;
-    if (returnValues && returnValues[0]) {
-      const bytes = new Uint8Array(returnValues[0][0]);
-      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      balance = view.getBigUint64(0, true);
-    }
-
-    // Spend status
-const tx2 = new Transaction();
-tx2.moveCall({
-  target: `${PACKAGE}::seal_api_pool::get_spend_status`,
-  arguments: [tx2.object(POOL), tx2.pure.address(wallet)],
-});
-
-    const spendResult = await client.devInspectTransactionBlock({
-      transactionBlock: tx2,
-      sender: GATEWAY_ADDR,
-    });
-
-    let dailyCap = 0n, dailySpent = 0n, monthlyCap = 0n, monthlySpent = 0n;
-    const spendValues = spendResult.results?.[0]?.returnValues;
-    if (spendValues && spendValues.length >= 4) {
-      const parseU64 = (val: any): bigint => {
-        const bytes = new Uint8Array(val[0]);
-        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-        return view.getBigUint64(0, true);
-      };
-      dailyCap = parseU64(spendValues[0]);
-      dailySpent = parseU64(spendValues[1]);
-      monthlyCap = parseU64(spendValues[2]);
-      monthlySpent = parseU64(spendValues[3]);
-    }
-
-    // Check pause state
-  const tx3 = new Transaction();
-tx3.moveCall({
-  target: `${PACKAGE}::seal_api_pool::is_wallet_paused`,
-  arguments: [tx3.object(POOL), tx3.pure.address(wallet)],
-});
-
-    const pauseResult = await client.devInspectTransactionBlock({
-      transactionBlock: tx3,
-      sender: GATEWAY_ADDR,
-    });
-
-    let onChainPaused = false;
-    const pauseValues = pauseResult.results?.[0]?.returnValues;
-    if (pauseValues && pauseValues[0]) {
-      onChainPaused = new Uint8Array(pauseValues[0][0])[0] !== 0;
-    }
-
-    const ledger = getOrCreateLedger(wallet);
-    const pauseRecord = pausedWallets.get(wallet);
-    const velocityWindow = velocityWindows.get(wallet);
-
-    res.json({
-      wallet,
-      balance: balance.toString(),
-      caps: {
-        daily: dailyCap.toString(),
-        monthly: monthlyCap.toString(),
-      },
-      spent: {
-        daily: dailySpent.toString(),
-        monthly: monthlySpent.toString(),
-        pending: ledger.spent.toString(),
-        reserved: ledger.reserved.toString(),
-      },
-      pause: {
-        onChain: onChainPaused,
-        soft: pauseRecord ? { pausedAt: pauseRecord.pausedAt, reason: pauseRecord.reason, auto: pauseRecord.auto } : null,
-      },
-      velocity: {
-        currentRate: velocityWindow?.requests.length || 0,
-        windowMs: VELOCITY_WINDOW_MS,
-        threshold: VELOCITY_THRESHOLD,
-      },
-    });
-  } catch (err: any) {
-    console.error('Status error:', err);
-    res.status(500).json({ error: 'Failed to fetch status', message: err.message });
-  }
-});
-
-// ── API KEY MANAGEMENT ────────────────────────────────────────────────────
-
+// Create API key for an existing treasury (called after user creates treasury via dashboard PTB)
 app.post('/keys/create', async (req, res) => {
-  const { wallet, label, allowApiKeyResume = false } = req.body;
-  if (!wallet) {
-    return res.status(400).json({ error: 'wallet required' });
+  const { wallet, treasuryId, label, allowResume = false } = req.body;
+  if (!wallet || !treasuryId) {
+    return res.status(400).json({ error: 'wallet and treasuryId required' });
   }
 
   const key = generateApiKey();
   apiKeys.set(key, {
     wallet,
+    treasuryId,
     label: label || 'default',
     createdAt: Date.now(),
     revoked: false,
-    allowApiKeyResume: !!allowApiKeyResume,
+    allowResume: !!allowResume,
   });
 
-  getOrCreateLedger(wallet);
+  getOrCreateLedger(treasuryId);
   persistApiKeys();
 
   res.json({
     status: 'success',
     key,
     wallet,
+    treasuryId,
     label: label || 'default',
-    allowApiKeyResume: !!allowApiKeyResume,
+    allowResume: !!allowResume,
   });
 });
 
+// List API keys for a wallet
 app.get('/keys/:wallet', async (req, res) => {
   const wallet = req.params.wallet;
   const keys = Array.from(apiKeys.entries())
     .filter(([_, v]) => v.wallet === wallet)
     .map(([k, v]) => ({
       key: k,
+      treasuryId: v.treasuryId,
       label: v.label,
       createdAt: v.createdAt,
       revoked: v.revoked,
-      allowApiKeyResume: v.allowApiKeyResume,
+      allowResume: v.allowResume,
     }));
 
   res.json({ wallet, keys });
 });
 
+// Revoke API key
 app.post('/keys/revoke', async (req, res) => {
   const { key } = req.body;
   const record = apiKeys.get(key);
@@ -559,7 +396,126 @@ app.post('/keys/revoke', async (req, res) => {
   res.json({ status: 'success', message: 'Key revoked' });
 });
 
-// ── PROTECTED API ROUTE (API KEY MODE) ────────────────────────────────────
+// Get agent status: balance, pause state, velocity, ledger
+app.get('/status/:treasuryId', async (req, res) => {
+  const treasuryId = req.params.treasuryId;
+
+  try {
+    // Fetch AgentTreasury object from Sui
+    const obj = await client.getObject({
+      id: treasuryId,
+      options: { showContent: true, showOwner: true },
+    });
+
+    if (!obj.data || obj.data.content?.dataType !== 'moveObject') {
+      return res.status(404).json({ error: 'AgentTreasury not found' });
+    }
+
+    const fields = (obj.data.content as any).fields as any;
+
+    const balance = BigInt(fields.balance);
+    const paused = fields.paused;
+    const owner = fields.owner;
+    const name = fields.name;
+    const parent = fields.parent?.fields?.vec?.[0] || null;
+
+    const policy = fields.policy?.fields || {};
+    const spendTracking = fields.spend_tracking?.fields || {};
+    const reputation = fields.reputation?.fields || {};
+
+    const ledger = getOrCreateLedger(treasuryId);
+    const pauseRecord = pausedAgents.get(treasuryId);
+    const velocityWindow = agentVelocityWindows.get(treasuryId);
+
+    res.json({
+      treasuryId,
+      owner,
+      name,
+      parent,
+      balance: balance.toString(),
+      policy: {
+        maxDailySpend: policy.max_daily_spend,
+        maxMonthlySpend: policy.max_monthly_spend,
+        maxSingleSpend: policy.max_single_spend,
+        approvedProviders: policy.approved_providers?.map((p: any) => p.fields.name) || [],
+        velocityThreshold: policy.velocity_threshold,
+      },
+      spendTracking: {
+        dailySpent: spendTracking.daily_spent,
+        monthlySpent: spendTracking.monthly_spent,
+        lastDailyReset: spendTracking.last_daily_reset,
+        lastMonthlyReset: spendTracking.last_monthly_reset,
+      },
+      reputation: {
+        totalSettled: reputation.total_settled,
+        successfulCalls: reputation.successful_calls,
+        violations: reputation.violations,
+        anomalyScore: reputation.anomaly_score,
+        lastActive: reputation.last_active,
+      },
+      paused: {
+        onChain: paused,
+        soft: pauseRecord ? { pausedAt: pauseRecord.pausedAt, reason: pauseRecord.reason, auto: pauseRecord.auto } : null,
+      },
+      velocity: {
+        currentRate: velocityWindow?.requests.length || 0,
+        windowMs: VELOCITY_WINDOW_MS,
+        threshold: VELOCITY_THRESHOLD,
+      },
+      ledger: {
+        reserved: ledger.reserved.toString(),
+        spent: ledger.spent.toString(),
+        lastSettlement: ledger.lastSettlement,
+      },
+    });
+  } catch (err: any) {
+    console.error('Status error:', err);
+    res.status(500).json({ error: 'Failed to fetch status', message: err.message });
+  }
+});
+
+// List all agent treasuries for a wallet (by querying objects owned by address)
+app.get('/agents/:wallet', async (req, res) => {
+  const wallet = req.params.wallet;
+
+  try {
+    // Query all AgentTreasury objects owned by this wallet
+    // Note: This is a simplified approach. In production, use event indexing or object listing.
+    const keys = Array.from(apiKeys.entries())
+      .filter(([_, v]) => v.wallet === wallet)
+      .map(([_, v]) => v.treasuryId);
+
+    const uniqueTreasuryIds = [...new Set(keys)];
+
+    const treasuries = [];
+    for (const id of uniqueTreasuryIds) {
+      try {
+        const obj = await client.getObject({
+          id,
+          options: { showContent: true },
+        });
+        if (obj.data?.content?.dataType === 'moveObject') {
+          const fields = (obj.data.content as any).fields as any;
+          treasuries.push({
+            treasuryId: id,
+            name: fields.name,
+            balance: (BigInt(fields.balance)).toString(),
+            paused: fields.paused,
+            parent: fields.parent?.fields?.vec?.[0] || null,
+          });
+        }
+      } catch (e) {
+        // Skip unavailable objects
+      }
+    }
+
+    res.json({ wallet, count: treasuries.length, treasuries });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch agents', message: err.message });
+  }
+});
+
+// ── PROTECTED API ROUTE (AGENT KEY MODE) ─────────────────────────────────
 
 app.post('/v1/chat', async (req, res) => {
   const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
@@ -571,7 +527,7 @@ app.post('/v1/chat', async (req, res) => {
 
   const authHeader = req.headers['authorization'] as string;
   if (!authHeader?.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing API key. Use: Authorization: Bearer seal_...' });
+    return res.status(401).json({ error: 'Missing API key. Use: Authorization: Bearer otter_...' });
   }
 
   const apiKey = authHeader.slice(7);
@@ -581,24 +537,24 @@ app.post('/v1/chat', async (req, res) => {
     return res.status(401).json({ error: 'Invalid or revoked API key' });
   }
 
-  const wallet = keyRecord.wallet;
+  const treasuryId = keyRecord.treasuryId;
 
-// ── CHECK SOFT PAUSE (before rate limit so paused wallets get clear error) ──
-const pauseRecord = pausedWallets.get(wallet);
-if (pauseRecord) {
-  return res.status(403).json({
-    error: 'Wallet paused',
-    reason: pauseRecord.reason,
-    pausedAt: pauseRecord.pausedAt,
-    auto: pauseRecord.auto,
-    message: 'This wallet has been paused due to unusual activity. Connect your wallet to the dashboard to resume.',
-  });
-}
+  // Check soft pause
+  const pauseRecord = pausedAgents.get(treasuryId);
+  if (pauseRecord) {
+    return res.status(403).json({
+      error: 'Agent paused',
+      reason: pauseRecord.reason,
+      pausedAt: pauseRecord.pausedAt,
+      auto: pauseRecord.auto,
+      message: 'This agent has been paused due to unusual activity. Connect your wallet to the dashboard to resume.',
+    });
+  }
 
-// Wallet rate limit
-if (!checkRateLimit(walletLimits, wallet, WALLET_LIMIT)) {
-  return res.status(429).json({ error: 'Rate limit exceeded. Max 10 requests per minute per wallet.' });
-}
+  // Treasury rate limit
+  if (!checkRateLimit(treasuryLimits, treasuryId, TREASURY_LIMIT)) {
+    return res.status(429).json({ error: 'Rate limit exceeded. Max 10 requests per minute per agent.' });
+  }
 
   const { model, messages, temperature = 0.7, max_tokens = 256 } = req.body;
 
@@ -606,7 +562,7 @@ if (!checkRateLimit(walletLimits, wallet, WALLET_LIMIT)) {
     return res.status(400).json({ error: 'model and messages required' });
   }
 
-  // ── CHECK PROVIDER AVAILABILITY ────────────────────────────────────────
+  // Check provider availability
   const providerInfo = getProviderForModel(model);
   if (!providerInfo) {
     return res.status(400).json({ error: `Unsupported model: ${model}. Use /providers to see available models.` });
@@ -619,8 +575,7 @@ if (!checkRateLimit(walletLimits, wallet, WALLET_LIMIT)) {
     });
   }
 
-  // ── ESTIMATE COST ─────────────────────────────────────────────────────
-  // Use max_tokens as upper bound for reservation
+  // Estimate cost
   const estimatedTokens = max_tokens;
   const estimatedCost = calculateCost(model, estimatedTokens);
 
@@ -628,34 +583,26 @@ if (!checkRateLimit(walletLimits, wallet, WALLET_LIMIT)) {
     return res.status(500).json({ error: 'Failed to calculate cost for model' });
   }
 
-  // ── CHECK ON-CHAIN BALANCE ────────────────────────────────────────────
+  // Check on-chain balance via object read
   let onChainBalance: bigint;
   try {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${PACKAGE}::seal_api_pool::get_balance`,
-      arguments: [tx.object(POOL), tx.pure.address(wallet)],
+    const obj = await client.getObject({
+      id: treasuryId,
+      options: { showContent: true },
     });
 
-    const balanceResult = await client.devInspectTransactionBlock({
-      transactionBlock: tx,
-      sender: GATEWAY_ADDR,
-    });
-
-    const returnValues = balanceResult.results?.[0]?.returnValues;
-    if (!returnValues || !returnValues[0]) {
-      return res.status(402).json({ error: 'Could not verify balance' });
+    if (!obj.data || obj.data.content?.dataType !== 'moveObject') {
+      return res.status(404).json({ error: 'AgentTreasury not found' });
     }
 
-    const bytes = new Uint8Array(returnValues[0][0]);
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    onChainBalance = view.getBigUint64(0, true);
+    const fields = (obj.data.content as any).fields as any;
+    onChainBalance = BigInt(fields.balance);
   } catch (err) {
     return res.status(502).json({ error: 'Failed to verify on-chain balance' });
   }
 
-  // ── CHECK OFF-CHAIN LEDGER ────────────────────────────────────────────
-  const ledger = getOrCreateLedger(wallet);
+  // Check off-chain ledger
+  const ledger = getOrCreateLedger(treasuryId);
   const available = onChainBalance - ledger.reserved - ledger.spent;
 
   if (available < estimatedCost) {
@@ -668,11 +615,11 @@ if (!checkRateLimit(walletLimits, wallet, WALLET_LIMIT)) {
     });
   }
 
-  // ── RESERVE CREDITS ───────────────────────────────────────────────────
+  // Reserve credits
   ledger.reserved += estimatedCost;
   persistLedger();
 
-  // ── CALL PROVIDER ─────────────────────────────────────────────────────
+  // Call provider
   let providerResponse;
   try {
     if (providerInfo.provider === 'groq') {
@@ -698,31 +645,58 @@ if (!checkRateLimit(walletLimits, wallet, WALLET_LIMIT)) {
     return res.status(502).json({ error: 'Provider error', details: providerResponse.error });
   }
 
-  // ── CALCULATE ACTUAL COST ────────────────────────────────────────────
+  // Calculate actual cost
   const actualTokens = providerResponse.usage?.total_tokens || estimatedTokens;
   const actualCost = calculateCost(model, actualTokens);
 
-  // ── DEDUCT FROM LEDGER ───────────────────────────────────────────────
+  // Deduct from ledger
   ledger.reserved -= estimatedCost;
   ledger.spent += actualCost;
   persistLedger();
 
-  // ── VELOCITY CHECK ────────────────────────────────────────────────────
-  const velocityCheck = checkVelocity(wallet);
-  if (velocityCheck.triggered) {
-    // Auto-pause
- pausedWallets.set(wallet, {
-  pausedAt: Date.now(),
-  reason: velocityCheck.reason,
-  auto: true,
-});
-persistPaused();
-walletLimits.delete(wallet);
+  // Settle on-chain via authorize_agent_call PTB
+  let settlementDigest: string | null = null;
+  try {
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${PACKAGE}::agent_treasury::authorize_agent_call`,
+      arguments: [
+        tx.object(treasuryId),
+        tx.pure.address(GATEWAY_ADDR),
+        tx.pure.u64(actualCost),
+        tx.pure.string(providerInfo.provider),
+        tx.object('0x6'), // Clock
+      ],
+    });
 
-    console.log(`[AUTO-PAUSE] Wallet ${wallet}: ${velocityCheck.reason}`);
+    const result = await client.signAndExecuteTransaction({
+      transaction: tx,
+      signer: gatewayKeypair,
+      options: { showEffects: true, showEvents: true },
+    });
+
+    settlementDigest = result.digest;
+  } catch (err: any) {
+    console.error('[SETTLEMENT] Failed:', err.message);
+    ledger.settlementFailures++;
+    persistLedger();
   }
 
-  // ── RETURN RESPONSE ───────────────────────────────────────────────────
+  // Velocity check
+  const velocityCheck = checkVelocity(treasuryId);
+  if (velocityCheck.triggered) {
+    pausedAgents.set(treasuryId, {
+      pausedAt: Date.now(),
+      reason: velocityCheck.reason,
+      auto: true,
+    });
+    persistPaused();
+    treasuryLimits.delete(treasuryId);
+
+    console.log(`[AUTO-PAUSE] Agent ${treasuryId}: ${velocityCheck.reason}`);
+  }
+
+  // Return response
   res.json({
     status: 'success',
     model: providerResponse.model,
@@ -734,6 +708,7 @@ walletLimits.delete(wallet);
       currency: 'MIST',
     },
     settlement: {
+      digest: settlementDigest,
       pending: ledger.spent.toString(),
       lastSettled: ledger.lastSettlement,
     },
@@ -745,9 +720,9 @@ walletLimits.delete(wallet);
   });
 });
 
-// ── RESUME ENDPOINTS ──────────────────────────────────────────────────────
+// ── RESUME ENDPOINTS ────────────────────────────────────────────────────────
 
-// Resume via API key (if allowApiKeyResume is true)
+// Resume via API key (if allowResume is true)
 app.post('/resume', async (req, res) => {
   const authHeader = req.headers['authorization'] as string;
   if (!authHeader?.startsWith('Bearer ')) {
@@ -761,179 +736,75 @@ app.post('/resume', async (req, res) => {
     return res.status(401).json({ error: 'Invalid or revoked API key' });
   }
 
-  if (!keyRecord.allowApiKeyResume) {
+  if (!keyRecord.allowResume) {
     return res.status(403).json({
       error: 'API key not authorized to resume',
       message: 'This key was created without resume permission. Use the dashboard to resume.',
     });
   }
 
-  const wallet = keyRecord.wallet;
-  const pauseRecord = pausedWallets.get(wallet);
+  const treasuryId = keyRecord.treasuryId;
+  const pauseRecord = pausedAgents.get(treasuryId);
   if (!pauseRecord) {
-    return res.json({ status: 'already_resumed', wallet });
+    return res.json({ status: 'already_resumed', treasuryId });
   }
 
-  pausedWallets.delete(wallet);
+  pausedAgents.delete(treasuryId);
   persistPaused();
 
   res.json({
     status: 'success',
-    wallet,
+    treasuryId,
     previousPause: pauseRecord,
   });
 });
 
-// Resume via wallet signature (most secure)
-// This is a stub — the actual implementation would verify a signature
-// For now, we accept a wallet address and trust the caller (dashboard uses dapp-kit)
-app.post('/resume/:wallet', async (req, res) => {
-  const wallet = req.params.wallet;
-  const pauseRecord = pausedWallets.get(wallet);
+// Resume via wallet address (dashboard)
+app.post('/resume/:treasuryId', async (req, res) => {
+  const treasuryId = req.params.treasuryId;
+  const pauseRecord = pausedAgents.get(treasuryId);
 
   if (!pauseRecord) {
-    return res.json({ status: 'already_resumed', wallet });
+    return res.json({ status: 'already_resumed', treasuryId });
   }
 
-  pausedWallets.delete(wallet);
+  pausedAgents.delete(treasuryId);
   persistPaused();
 
   res.json({
     status: 'success',
-    wallet,
+    treasuryId,
     previousPause: pauseRecord,
   });
 });
 
-// ── ON-CHAIN SETTLEMENT ───────────────────────────────────────────────────
+// ── BATCH SETTLEMENT ─────────────────────────────────────────────────────
 
-app.post('/settle', async (req, res) => {
-  const { wallet, total_cost, provider_name, provider_addr, model_name, tokens_used, request_hash } = req.body;
-
-  if (!wallet || !total_cost || !provider_name || !provider_addr) {
-    return res.status(400).json({ error: 'Missing required fields' });
-  }
-
-  const tx = new Transaction();
-  tx.moveCall({
-    target: `${PACKAGE}::seal_api_pool::authorize_call`,
-    arguments: [
-      tx.object(POOL),
-      tx.pure.address(wallet),
-      tx.pure.u64(total_cost),
-      tx.pure.vector('u8', Array.from(Buffer.from(provider_name))),
-      tx.pure.address(provider_addr),
-      tx.pure.vector('u8', Array.from(Buffer.from(request_hash || 'default'))),
-      tx.pure.vector('u8', Array.from(Buffer.from(model_name || 'unknown'))),
-      tx.pure.u64(tokens_used || 0),
-      tx.object('0x6'),
-    ],
-  });
-
-  try {
-    const result = await client.signAndExecuteTransaction({
-      transaction: tx,
-      signer: gatewayKeypair,
-      options: { showEffects: true, showEvents: true },
-    });
-
-    const receiptEvent = result.events?.find(e => e.type.includes('ApiCallReceiptEvent'));
-
-    res.json({
-      status: 'success',
-      digest: result.digest,
-      receipt: receiptEvent?.parsedJson || null,
-    });
-  } catch (err: any) {
-    res.status(500).json({ status: 'error', message: err.message });
-  }
-});
-
-// ── X402 PROTECTED ROUTE (SECONDARY FLOW) ────────────────────────────────
-
-app.post('/api/:provider', x402ProviderMiddleware(x402Config), async (req, res) => {
-  const { provider } = req.params;
-  const apiResponse = await proxyToProvider(provider, req.body);
-  res.json(apiResponse);
-});
-
-async function proxyToProvider(provider: string, body: any): Promise<any> {
-  const prompt = body.prompt || 'Hello';
-
-  try {
-    const response = await fetch('http://localhost:8080/completion', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt: prompt,
-        n_predict: 128,
-        temperature: 0.7,
-        stop: ['</s>', 'User:', 'Human:'],
-        stream: false,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`llama.cpp error: ${response.status}`);
-    }
-
-    const data = await response.json();
-
-    return {
-      status: 'success',
-      provider,
-      seal: { settled: true },
-      ai: {
-        model: 'qwen2.5-coder-1.5b-instruct-q4_0',
-        content: data.content?.trim() || 'No response',
-        tokens_used: data.tokens_evaluated || 0,
-      },
-      timestamp: Date.now(),
-    };
-  } catch (err: any) {
-    return {
-      status: 'error',
-      provider,
-      message: 'llama.cpp server not running on port 8080',
-      error: err.message,
-      timestamp: Date.now(),
-    };
-  }
-}
-
-// ── BATCH SETTLEMENT ───────────────────────────────────────────────────────
-// Every 5 minutes, settle accumulated spend on-chain.
-// If settlement fails 3 times consecutively, stop retrying and alert.
-
-const SETTLEMENT_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const SETTLEMENT_INTERVAL = 5 * 60 * 1000;
 const MAX_SETTLEMENT_FAILURES = 3;
 
 async function runBatchSettlement() {
   console.log('[SETTLEMENT] Running batch settlement...');
 
-  for (const [wallet, ledger] of creditLedger.entries()) {
+  for (const [treasuryId, ledger] of agentLedger.entries()) {
     if (ledger.spent === 0n) continue;
     if (ledger.settlementFailures >= MAX_SETTLEMENT_FAILURES) {
-      console.warn(`[SETTLEMENT] Skipping ${wallet}: ${ledger.settlementFailures} consecutive failures. Manual intervention required.`);
+      console.warn(`[SETTLEMENT] Skipping ${treasuryId}: ${ledger.settlementFailures} consecutive failures.`);
       continue;
     }
 
     const amount = ledger.spent;
-    console.log(`[SETTLEMENT] Settling ${amount} MIST for ${wallet}`);
+    console.log(`[SETTLEMENT] Settling ${amount} MIST for agent ${treasuryId}`);
 
     try {
       const tx = new Transaction();
       tx.moveCall({
-        target: `${PACKAGE}::seal_api_pool::authorize_call`,
+        target: `${PACKAGE}::agent_treasury::authorize_agent_call`,
         arguments: [
-          tx.object(POOL),
-          tx.pure.address(wallet),
-          tx.pure.u64(amount),
-          tx.pure.vector('u8', Array.from(Buffer.from('batch'))),
+          tx.object(treasuryId),
           tx.pure.address(GATEWAY_ADDR),
-          tx.pure.vector('u8', Array.from(Buffer.from('batch_settlement'))),
-          tx.pure.vector('u8', Array.from(Buffer.from('batch'))),
-          tx.pure.u64(0),
+          tx.pure.u64(amount),
+          tx.pure.string('batch'),
           tx.object('0x6'),
         ],
       });
@@ -953,52 +824,23 @@ async function runBatchSettlement() {
       } else {
         ledger.settlementFailures++;
         persistLedger();
-        console.error(`[SETTLEMENT] Failed for ${wallet}:`, result.effects?.status);
+        console.error(`[SETTLEMENT] Failed for ${treasuryId}:`, result.effects?.status);
       }
     } catch (err: any) {
       ledger.settlementFailures++;
       persistLedger();
-      console.error(`[SETTLEMENT] Error for ${wallet}:`, err.message);
+      console.error(`[SETTLEMENT] Error for ${treasuryId}:`, err.message);
     }
   }
 }
 
 setInterval(runBatchSettlement, SETTLEMENT_INTERVAL);
 
-// ── EVENT INDEXER ENDPOINTS ────────────────────────────────────────────────
-
-startIndexer();
-
-app.get('/events', async (req, res) => {
-  const limit = parseInt(req.query.limit as string) || 100;
-  res.json({
-    events: getAllEvents(limit),
-    stats: getStats(),
-  });
-});
-
-app.get('/events/:wallet', async (req, res) => {
-  const wallet = req.params.wallet;
-  const events = getEventsForWallet(wallet);
-  res.json({ wallet, count: events.length, events });
-});
-
-app.get('/events/type/:eventType', async (req, res) => {
-  const eventType = req.params.eventType;
-  const fullType = `${PACKAGE}::seal_api_pool::${eventType}`;
-  const events = getEventsByType(fullType);
-  res.json({ type: eventType, count: events.length, events });
-});
-
-app.get('/indexer/stats', async (_req, res) => {
-  res.json(getStats());
-});
-
 // ── START SERVER ───────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`SEAL Gateway v0.2.0 running on http://localhost:${PORT}`);
-  console.log(`Pool: ${POOL}`);
+  console.log(`Otter Gateway v0.3.0 running on http://localhost:${PORT}`);
+  console.log(`Package: ${PACKAGE}`);
   console.log(`Gateway: ${GATEWAY_ADDR}`);
   console.log(`Providers: ${Object.keys(PROVIDERS).join(', ')}`);
   console.log(`Data directory: ${DATA_DIR}`);
