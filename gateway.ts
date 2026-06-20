@@ -545,7 +545,8 @@ app.get('/agents/:wallet', async (req, res) => {
   const wallet = req.params.wallet;
 
   try {
-    const [createdEvents, spawnedEvents] = await Promise.all([
+    // Query all three event types: created, spawned, and reclaimed
+    const [createdEvents, spawnedEvents, reclaimedEvents] = await Promise.all([
       client.queryEvents({
         query: { MoveEventType: `${PACKAGE}::agent_treasury::AgentCreated` },
         limit: 100,
@@ -554,10 +555,24 @@ app.get('/agents/:wallet', async (req, res) => {
         query: { MoveEventType: `${PACKAGE}::agent_treasury::ChildSpawned` },
         limit: 100,
       }),
+      client.queryEvents({
+        query: { MoveEventType: `${PACKAGE}::agent_treasury::BudgetReclaimed` },
+        limit: 100,
+      }),
     ]);
+
+    // Build set of reclaimed child IDs
+    const reclaimedIds = new Set<string>();
+    for (const e of reclaimedEvents.data) {
+      const childId = e.parsedJson?.child_id;
+      if (childId) {
+        reclaimedIds.add(childId);
+      }
+    }
 
     const treasuryMap = new Map<string, any>();
 
+    // Process master treasuries (AgentCreated)
     for (const e of createdEvents.data) {
       if (e.parsedJson?.owner === wallet) {
         treasuryMap.set(e.parsedJson.treasury_id, {
@@ -571,10 +586,12 @@ app.get('/agents/:wallet', async (req, res) => {
       }
     }
 
+    // Process child treasuries (ChildSpawned), skipping reclaimed ones
     for (const e of spawnedEvents.data) {
-      if (e.parsedJson?.owner === wallet) {
-        treasuryMap.set(e.parsedJson.child_id, {
-          id: e.parsedJson.child_id,
+      const childId = e.parsedJson?.child_id;
+      if (e.parsedJson?.owner === wallet && childId && !reclaimedIds.has(childId)) {
+        treasuryMap.set(childId, {
+          id: childId,
           name: e.parsedJson.name,
           owner: e.parsedJson.owner,
           parent: e.parsedJson.parent_id,
@@ -586,6 +603,7 @@ app.get('/agents/:wallet', async (req, res) => {
 
     const myTreasuries = Array.from(treasuryMap.values());
 
+    // Fetch current on-chain state for each treasury
     for (const t of myTreasuries) {
       try {
         const obj = await client.getObject({
@@ -597,7 +615,10 @@ app.get('/agents/:wallet', async (req, res) => {
           t.balance = (BigInt(fields.balance)).toString();
           t.paused = fields.paused;
         }
-      } catch (e) {}
+      } catch (e) {
+        // Object may have been deleted (e.g., master reclaimed via different path)
+        // Keep the event data but mark balance as unknown
+      }
     }
 
     res.json({ wallet, count: myTreasuries.length, treasuries: myTreasuries });
