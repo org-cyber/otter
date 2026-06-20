@@ -1,45 +1,28 @@
+# SEAL — Autonomous Agent Treasury Protocol
 
-# Otter v0.3 — Autonomous Agent Treasury Protocol
+> Programmable bank accounts for AI agents on Sui.
 
-> The financial operating system for autonomous AI agents on Sui.
+## What This Is
 
-## Table of Contents
+SEAL gives every AI agent its own on-chain treasury — a Sui object that physically holds `Coin<SUI>`, enforces spending policies, and can be reclaimed atomically. No central custodian. No opaque billing. Just object-native budget control.
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [File Structure](#file-structure)
-- [Quick Start](#quick-start)
-- [API Reference](#api-reference)
-- [Smart Contract Reference](#smart-contract-reference)
-- [Usage Examples](#usage-examples)
-- [Environment Variables](#environment-variables)
-- [Data Persistence](#data-persistence)
-- [Provider Configuration](#provider-configuration)
-- [Security Model](#security-model)
+### Why It Exists
 
----
+Today, AI agents run on API keys tied to a developer's credit card. If an agent goes rogue, gets prompt-injected, or spawns unexpected sub-agents, the bill spikes with no ceiling. There's no way to give a sub-agent a capped budget, no way to reclaim unused funds, and no audit trail of what was spent where.
 
-## Overview
-
-Otter gives every AI agent its own programmable bank account on Sui. Each agent treasury is a real Sui object that physically owns `Coin<SUI>` funds, operates under programmable constraints, and can be revoked atomically.
-
-### Core Concepts
-
-| Concept | Description |
-|---------|-------------|
-| **Master Treasury** | Root treasury object created by a wallet. Can spawn child agents. |
-| **Agent Treasury** | Child object with its own `Balance<SUI>`, policy, and reputation. |
-| **TreasuryOwnerCap** | Capability proving ownership. Required for spawn, reclaim, pause, resume. |
-| **PolicySet** | Programmable constraints: daily/monthly caps, approved providers, velocity limits. |
-| **Atomic Reclaim** | Parent destroys child object, reclaims budget in one transaction. |
+SEAL fixes this by making each agent treasury a **first-class Sui object** with:
+- **Owned balance** — the object literally holds its own SUI
+- **Programmable policy** — daily caps, monthly caps, single-spend limits, approved providers
+- **Hierarchical budgeting** — master treasuries spawn children with sub-budgets
+- **Atomic reclaim** — pull remaining funds back to parent in one transaction
+- **On-chain settlement** — every inference call deducts MIST and records the digest
 
 ### Why Sui
 
-This architecture is impossible on Ethereum and awkward on Solana. Sui's object-centric design enables:
-
-- **Physical ownership**: Parent objects literally own child `Coin<SUI>` objects
-- **Parallel execution**: Independent agent treasuries execute simultaneously
-- **Atomic destruction**: Reclaim and destroy child objects in one PTB
+This architecture is impossible on account-based chains. Sui's object-centric design enables:
+- **Physical ownership** — parent objects literally own child `Coin<SUI>` objects
+- **Parallel execution** — independent agent treasuries settle simultaneously without contention
+- **Atomic destruction** — reclaim and destroy child objects in a single PTB
 
 ---
 
@@ -47,28 +30,30 @@ This architecture is impossible on Ethereum and awkward on Solana. Sui's object-
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Otter Dashboard (Next.js)                  │
-│  • Wallet connect  • Treasury tree UI  • PTB construction    │
+│                    SEAL Dashboard (Next.js)                   │
+│  • Wallet connect  • Treasury tree UI  • PTB construction   │
 │  • Agent spawn/reclaim  • Parallel demo  • SuiScan links    │
+│  • API key generation  • Real-time balance monitoring        │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    Otter Gateway (Node/TS)                   │
-│  • API key auth → treasuryId  • Provider routing (Groq live) │
-│  • Per-agent velocity tracking  • Soft pause/resume          │
-│  • On-chain settlement via authorize_agent_call            │
-│  • Batch settlement every 5 minutes                         │
+│                    SEAL Gateway (Node/TS)                     │
+│  • API key auth → treasuryId  • Provider routing (Groq live)  │
+│  • Per-agent velocity tracking  • Soft pause/resume           │
+│  • Immediate on-chain settlement  • Batch cleanup (2 min)   │
+│  • Per-treasury serialization (prevents object-lock collisions)│
+│  • Retryable vs non-retryable error classification           │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │              Sui Move Contract (Testnet)                      │
 │  • AgentTreasury (shared object)                            │
-│  • create_master_treasury  • spawn_child_agent               │
-│  • reclaim_child_budget (atomic)  • authorize_agent_call   │
-│  • pause_agent / resume_agent  • Policy enforcement        │
-│  • Events: AgentCreated, ChildSpawned, BudgetReclaimed, etc  │
+│  • create_master_treasury  • spawn_child_agent              │
+│  • reclaim_child_budget (atomic)  • authorize_agent_call    │
+│  • pause_agent / resume_agent  • Policy enforcement         │
+│  • Events: AgentCreated, ChildSpawned, BudgetReclaimed, etc │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -85,19 +70,20 @@ User creates Master Treasury (user-signed PTB)
            │ spawn_child_agent (user-signed PTB)
            ▼
     ┌─────────────┐     ┌─────────────┐
-    │  Trading    │     │  Research   │
-    │  Agent      │     │  Agent      │
+    │  Twitter    │     │  Trading    │
+    │  Bot        │     │  Bot        │
     └──────┬──────┘     └──────┬──────┘
            │                   │
            │ API calls with    │ API calls with
            │ otter_... key     │ otter_... key
            ▼                   ▼
     ┌─────────────────────────────────────┐
-    │         Otter Gateway               │
+    │         SEAL Gateway                │
     │  • Check on-chain balance           │
     │  • Check policy constraints         │
     │  • Call provider (Groq)             │
     │  • Settle via authorize_agent_call  │
+    │  • Handle object-lock serialization │
     └─────────────────────────────────────┘
 ```
 
@@ -106,31 +92,37 @@ User creates Master Treasury (user-signed PTB)
 ## File Structure
 
 ```
-otter/
-├── otter-contract/
+seal/
+├── seal-contract/
 │   ├── Move.toml
 │   └── sources/
 │       └── agent_treasury.move          # Core Move contract
 │
-├── otter-gateway/
+├── seal-gateway/
 │   ├── .env                             # Environment variables
 │   ├── package.json
 │   ├── tsconfig.json
-│   ├── data/                            # Persistent state (JSON files)
+│   ├── data/                            # Persistent state (JSON)
 │   │   ├── api-keys.json               # API key → treasuryId mappings
 │   │   ├── agent-ledger.json           # Per-agent spend tracking
 │   │   └── paused-agents.json          # Soft pause state
-│   └── src/
-│       └── gateway.ts                   # Main gateway server
+│   └── gateway.ts                       # Main gateway server
 │
-├── otter-dashboard/
+├── seal-dashboard/
 │   ├── .env.local
 │   ├── package.json
 │   ├── next.config.js
 │   └── src/
 │       └── app/
-│           ├── page.tsx                 # Main dashboard
+│           ├── page.tsx                  # Main dashboard
 │           └── layout.tsx
+│
+├── seal-sdk/
+│   ├── otter-sdk.ts                     # TypeScript SDK
+│   ├── otter_sdk.py                     # Python SDK
+│   ├── example.ts                       # TypeScript usage
+│   ├── example.py                       # Python usage
+│   └── README.md                        # SDK docs
 │
 └── README.md                            # This file
 ```
@@ -142,74 +134,102 @@ otter/
 ### 1. Deploy Contract
 
 ```bash
-cd otter-contract
+cd seal-contract
 
-# Ensure Move.toml is configured
-cat Move.toml
-# [package]
-# name = "otter"
-# version = "0.0.1"
-# edition = "2024.beta"
-# 
-# [dependencies]
-# Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "testnet" }
-# 
-# [addresses]
-# otter = "0x0"
-
-# Build and deploy (use BitLab IDE or CLI)
+# Build and deploy (BitLab IDE or CLI)
 sui client publish --gas-budget 50000000
 
 # Save the Package ID from output
-export PACKAGE_ID="0xdbfb39eabe0938cb1495443b733e00bd90799a6d5ea870227d9f0e426091b480"
+export PACKAGE_ID="0xYOUR_PACKAGE_ID"
 ```
 
 ### 2. Start Gateway
 
 ```bash
-cd otter-gateway
+cd seal-gateway
 
-# Create .env file
+# Create .env
 cat > .env << 'EOF'
 SUI_RPC=https://sui-testnet-rpc.publicnode.com
-PACKAGE_ID=0xdbfb39eabe0938cb1495443b733e00bd90799a6d5ea870227d9f0e426091b480
-GATEWAY_ADDRESS=0xdb46b6c133f989a776279be1ef95c2f3cc0be6cf8103d8ab390363964d475c13
-GATEWAY_PRIVATE_KEY=suiprivkey1qq3s87q8jlf5p3h6edxemqdklzjkwcfxevmqhk2sdvndjtuahyw2qwnag0x
+PACKAGE_ID=0xYOUR_PACKAGE_ID
+GATEWAY_ADDRESS=0xYOUR_GATEWAY_ADDRESS
+GATEWAY_PRIVATE_KEY=YOUR_PRIVATE_KEY
 PORT=3001
 GROQ_API_KEY=gsk_YOUR_GROQ_KEY
 EOF
 
 npm install
-npm run dev        # ts-node gateway.ts or tsx gateway.ts
+npx tsx gateway.ts
 ```
 
-### 3. Test Health Endpoint
+### 3. Start Dashboard
 
 ```bash
-curl http://localhost:3001/health
+cd seal-dashboard
+npm install
+npm run dev
 ```
 
-Expected response:
-```json
-{
-  "status": "ok",
-  "package": "0xdbfb39eabe0938cb1495443b733e00bd90799a6d5ea870227d9f0e426091b480",
-  "gateway": "0xdb46b6c133f989a776279be1ef95c2f3cc0be6cf8103d8ab390363964d475c13",
-  "providers": {
-    "groq": {
-      "configured": true,
-      "models": ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "mixtral-8x7b-32768"]
-    },
-    "openai": {
-      "configured": false,
-      "models": ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"]
-    },
-    "anthropic": {
-      "configured": false,
-      "models": ["claude-3-5-sonnet-20241022", "claude-3-haiku-20240307"]
-    }
-  }
-}
+Open `http://localhost:3000` and connect your Sui wallet.
+
+---
+
+## Usage
+
+### For Treasury Owners (Dashboard)
+
+1. **Connect wallet** — Click "Connect" in the dashboard
+2. **Create master treasury** — Enter name + deposit (e.g., 0.1 SUI), click "Create Treasury"
+3. **Spawn child agents** — Click "+ Spawn Child", set name + budget + daily cap
+4. **Generate API keys** — Click "Create Key" on any agent, copy the key
+5. **Monitor** — View balances, pause states, and SuiScan links in real time
+6. **Reclaim** — Click "Reclaim" to atomically pull remaining budget back to parent
+
+### For Agent Developers (SDK)
+
+**TypeScript:**
+```typescript
+import { OtterAgent } from './otter-sdk';
+
+const agent = new OtterAgent({
+  gatewayUrl: 'http://localhost:3001',
+  apiKey: 'otter_xxx...',
+});
+
+const response = await agent.chat([
+  { role: 'user', content: 'Analyze BTC price trend' }
+]);
+
+console.log(response.content);
+console.log(`Cost: ${response.cost.actual} MIST`);
+console.log(`Settlement: ${response.settlement.digest}`);
+```
+
+**Python:**
+```python
+from otter_sdk import OtterAgent, ChatMessage
+
+agent = OtterAgent(
+    gateway_url="http://localhost:3001",
+    api_key="otter_xxx...",
+)
+
+response = agent.chat([ChatMessage("user", "Analyze BTC price trend")])
+
+print(response.content)
+print(f"Cost: {response.cost.actual} MIST")
+print(f"Settlement: {response.settlement.digest}")
+```
+
+**cURL:**
+```bash
+curl -X POST http://localhost:3001/v1/chat \
+  -H "Authorization: Bearer otter_xxx..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-3.1-8b-instant",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
 ```
 
 ---
@@ -220,7 +240,7 @@ Expected response:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/health` | Gateway status, provider config |
+| GET | `/health` | Gateway status, package, RPC, provider config |
 | GET | `/providers` | List providers, models, cost rates |
 
 ### Agent Treasury Management
@@ -230,21 +250,55 @@ Expected response:
 | POST | `/keys/create` | Generate API key for existing treasury |
 | GET | `/keys/:wallet` | List API keys for wallet |
 | POST | `/keys/revoke` | Revoke API key |
-| GET | `/status/:treasuryId` | Full agent status (balance, policy, pause, reputation) |
-| GET | `/agents/:wallet` | List all agent treasuries for wallet |
+| GET | `/status/:treasuryId` | Full agent status (balance, policy, pause, reputation, ledger) |
+| GET | `/agents/:wallet` | List all agent treasuries for wallet (tree structure) |
+| POST | `/caps` | Get TreasuryOwnerCap objects for wallet |
 
 ### Chat Completion
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/v1/chat` | Chat completion with agent settlement |
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/v1/chat` | `Bearer otter_...` | Chat completion with on-chain settlement |
 
 ### Pause/Resume
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/resume` | Resume via API key (if permitted) |
-| POST | `/resume/:treasuryId` | Resume via treasury ID |
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/resume` | `Bearer otter_...` | Resume via API key (if `allowResume`) |
+| POST | `/resume/:treasuryId` | None | Resume via treasury ID (dashboard) |
+
+### Chat Response Format
+
+```json
+{
+  "status": "success",
+  "model": "llama-3.1-8b-instant",
+  "content": "...",
+  "usage": {
+    "total_tokens": 128,
+    "prompt_tokens": 12,
+    "completion_tokens": 116
+  },
+  "cost": {
+    "estimated": "50000",
+    "actual": "6400",
+    "currency": "MIST"
+  },
+  "settlement": {
+    "digest": "CnELzt7...",
+    "error": null,
+    "settled": true,
+    "retryable": false,
+    "pending": "0",
+    "lastSettled": 1718812800000
+  },
+  "velocity": {
+    "rate": 1,
+    "threshold": 8,
+    "windowMs": 60000
+  }
+}
+```
 
 ---
 
@@ -256,9 +310,9 @@ Expected response:
 struct AgentTreasury has key {
     id: UID,
     owner: address,
-    parent: Option<ID>,           // None = root, Some = child
+    parent: Option<ID>,
     name: String,
-    balance: Balance<SUI>,        // OWNED funds
+    balance: Balance<SUI>,
     policy: PolicySet,
     spend_tracking: SpendTracking,
     reputation: Reputation,
@@ -282,13 +336,13 @@ struct TreasuryOwnerCap has key, store {
 
 ### Entry Functions
 
-| Function | Who Calls | Description |
-|----------|-----------|-------------|
+| Function | Caller | Description |
+|----------|--------|-------------|
 | `create_master_treasury` | User (dashboard PTB) | Create root treasury with initial deposit |
 | `spawn_child_agent` | User (dashboard PTB) | Split parent budget, create child object |
-| `reclaim_child_budget` | User (dashboard PTB) | Destroy child, reclaim budget to parent |
+| `reclaim_child_budget` | User (dashboard PTB) | Destroy child, reclaim budget to parent atomically |
 | `authorize_agent_call` | Gateway | Settle spend from agent treasury to gateway |
-| `pause_agent` | User or Gateway | Pause agent (soft pause via gateway, hard via PTB) |
+| `pause_agent` | User or Gateway | Pause agent |
 | `resume_agent` | User (dashboard PTB) | Resume paused agent |
 | `deposit` | Anyone | Add funds to any treasury |
 | `withdraw` | User (dashboard PTB) | Withdraw funds from treasury |
@@ -298,283 +352,14 @@ struct TreasuryOwnerCap has key, store {
 
 | Event | Emitted By | Fields |
 |-------|-----------|--------|
-| `AgentCreated` | `create_master_treasury` | treasury_id, owner, parent, name, initial_budget, created_at |
-| `ChildSpawned` | `spawn_child_agent` | parent_id, child_id, owner, budget, name |
-| `BudgetReclaimed` | `reclaim_child_budget` | child_id, parent_id, amount, timestamp |
-| `AgentPaused` | `pause_agent` | treasury_id, reason, auto, timestamp |
-| `AgentResumed` | `resume_agent` | treasury_id, timestamp |
-| `CallAuthorized` | `authorize_agent_call` | treasury_id, cost, provider, remaining_balance, timestamp |
-| `FundsDeposited` | `deposit` | treasury_id, amount, source, timestamp |
-| `FundsWithdrawn` | `withdraw` | treasury_id, amount, timestamp |
-
----
-
-## Usage Examples
-
-### Example 1: Create Master Treasury (Dashboard PTB)
-
-```typescript
-import { Transaction } from '@mysten/sui/transactions';
-
-const tx = new Transaction();
-tx.setGasBudget(10_000_000);
-
-// Initial deposit
-const [payment] = tx.splitCoins(tx.gas, [tx.pure.u64(100_000_000n)]); // 0.1 SUI
-
-// Create policy
-const policy = tx.moveCall({
-  target: `${PACKAGE_ID}::agent_treasury::create_policy`,
-  arguments: [
-    tx.pure.u64(5_000_000n),           // max_daily_spend: 0.005 SUI
-    tx.pure.u64(50_000_000n),          // max_monthly_spend: 0.05 SUI
-    tx.pure.u64(1_000_000n),           // max_single_spend: 0.001 SUI
-    tx.pure.vector('string', ['groq']), // approved_providers
-    tx.pure.u64(5),                     // velocity_threshold: 5 req/min
-  ],
-});
-
-// Create master treasury
-tx.moveCall({
-  target: `${PACKAGE_ID}::agent_treasury::create_master_treasury`,
-  arguments: [
-    payment,
-    tx.pure.string('Master Treasury'),
-    policy,
-    tx.object('0x6'), // Clock
-  ],
-});
-
-// Sign and execute with dapp-kit
-signAndExecute({ transaction: tx }, {
-  onSuccess: (result) => {
-    console.log('Treasury created:', result.digest);
-    // Extract treasury ID from created objects
-  },
-});
-```
-
-### Example 2: Spawn Child Agent (Dashboard PTB)
-
-```typescript
-const tx = new Transaction();
-tx.setGasBudget(10_000_000);
-
-// Get TreasuryOwnerCap from wallet (you own it)
-const parentCap = tx.object(TREASURY_OWNER_CAP_ID);
-const parentTreasury = tx.object(PARENT_TREASURY_ID);
-
-// Create child policy
-const childPolicy = tx.moveCall({
-  target: `${PACKAGE_ID}::agent_treasury::create_policy`,
-  arguments: [
-    tx.pure.u64(2_000_000n),   // max_daily_spend
-    tx.pure.u64(20_000_000n),  // max_monthly_spend
-    tx.pure.u64(500_000n),     // max_single_spend
-    tx.pure.vector('string', ['groq', 'cetus']),
-    tx.pure.u64(3),
-  ],
-});
-
-// Spawn child with 0.03 SUI budget
-tx.moveCall({
-  target: `${PACKAGE_ID}::agent_treasury::spawn_child_agent`,
-  arguments: [
-    parentCap,
-    parentTreasury,
-    tx.pure.u64(30_000_000n),  // budget: 0.03 SUI
-    tx.pure.string('Trading Agent'),
-    childPolicy,
-    tx.object('0x6'),
-  ],
-});
-
-signAndExecute({ transaction: tx }, { onSuccess: (result) => console.log(result) });
-```
-
-### Example 3: Reclaim Child Budget (Dashboard PTB)
-
-```typescript
-const tx = new Transaction();
-tx.setGasBudget(10_000_000);
-
-const parentCap = tx.object(TREASURY_OWNER_CAP_ID);
-const parentTreasury = tx.object(PARENT_TREASURY_ID);
-const childTreasury = tx.object(CHILD_TREASURY_ID); // Must be owned by parent
-
-tx.moveCall({
-  target: `${PACKAGE_ID}::agent_treasury::reclaim_child_budget`,
-  arguments: [
-    parentCap,
-    parentTreasury,
-    childTreasury,
-    tx.object('0x6'),
-  ],
-});
-
-signAndExecute({ transaction: tx }, { onSuccess: (result) => console.log(result) });
-```
-
-### Example 4: Create API Key (Gateway)
-
-```bash
-curl -X POST http://localhost:3001/keys/create \
-  -H "Content-Type: application/json" \
-  -d '{
-    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
-    "treasuryId": "0xabc123...",
-    "label": "Trading Agent Key",
-    "allowResume": true
-  }'
-```
-
-Response:
-```json
-{
-  "status": "success",
-  "key": "otter_aB3xK9mP2vL7nQ4...",
-  "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
-  "treasuryId": "0xabc123...",
-  "label": "Trading Agent Key",
-  "allowResume": true
-}
-```
-
-### Example 5: Chat Completion (Agent API Key)
-
-```bash
-curl -X POST http://localhost:3001/v1/chat \
-  -H "Authorization: Bearer otter_aB3xK9mP2vL7nQ4..." \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "llama-3.1-8b-instant",
-    "messages": [{"role": "user", "content": "Analyze BTC price trend"}],
-    "temperature": 0.7,
-    "max_tokens": 256
-  }'
-```
-
-Response:
-```json
-{
-  "status": "success",
-  "model": "llama-3.1-8b-instant",
-  "content": "Based on current market data...",
-  "usage": {
-    "total_tokens": 128,
-    "prompt_tokens": 12,
-    "completion_tokens": 116
-  },
-  "cost": {
-    "estimated": "50000",
-    "actual": "64000",
-    "currency": "MIST"
-  },
-  "settlement": {
-    "digest": "CnELzt7KW7qnkC5VLhCBJQJ2ZTxwghV8aXR9kZR6P1Vh",
-    "pending": "0",
-    "lastSettled": 1718812800000
-  },
-  "velocity": {
-    "rate": 1,
-    "threshold": 8,
-    "windowMs": 60000
-  }
-}
-```
-
-### Example 6: Check Agent Status
-
-```bash
-curl http://localhost:3001/status/0xabc123...
-```
-
-Response:
-```json
-{
-  "treasuryId": "0xabc123...",
-  "owner": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
-  "name": "Trading Agent",
-  "parent": "0xdef456...",
-  "balance": "27000000",
-  "policy": {
-    "maxDailySpend": 2000000,
-    "maxMonthlySpend": 20000000,
-    "maxSingleSpend": 500000,
-    "approvedProviders": ["groq", "cetus"],
-    "velocityThreshold": 3
-  },
-  "spendTracking": {
-    "dailySpent": 64000,
-    "monthlySpent": 128000,
-    "lastDailyReset": 1718812800000,
-    "lastMonthlyReset": 1718812800000
-  },
-  "reputation": {
-    "totalSettled": 128000,
-    "successfulCalls": 2,
-    "violations": 0,
-    "anomalyScore": 0,
-    "lastActive": 1718812800000
-  },
-  "paused": {
-    "onChain": false,
-    "soft": null
-  },
-  "velocity": {
-    "currentRate": 1,
-    "windowMs": 60000,
-    "threshold": 8
-  },
-  "ledger": {
-    "reserved": "0",
-    "spent": "0",
-    "lastSettlement": 1718812800000
-  }
-}
-```
-
-### Example 7: Resume Paused Agent
-
-```bash
-# Via API key
-curl -X POST http://localhost:3001/resume \
-  -H "Authorization: Bearer otter_aB3xK9mP2vL7nQ4..."
-
-# Via treasury ID (dashboard)
-curl -X POST http://localhost:3001/resume/0xabc123...
-```
-
----
-
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `SUI_RPC` | Yes | Sui RPC endpoint (testnet recommended) |
-| `PACKAGE_ID` | Yes | Deployed Otter package ID |
-| `GATEWAY_ADDRESS` | Yes | Gateway Sui address for settlement |
-| `GATEWAY_PRIVATE_KEY` | Yes | Gateway private key for signing settlement PTBs |
-| `PORT` | No | Gateway port (default: 3001) |
-| `GROQ_API_KEY` | Yes* | Groq API key (only live provider) |
-| `OPENAI_API_KEY` | No | OpenAI API key (stub if missing) |
-| `ANTHROPIC_API_KEY` | No | Anthropic API key (stub if missing) |
-
-*Required for Groq provider to function.
-
----
-
-## Data Persistence
-
-The gateway stores state in JSON files under `./data/`:
-
-| File | Purpose | Format |
-|------|---------|--------|
-| `api-keys.json` | API key → treasuryId mappings | `Record<string, AgentApiKey>` |
-| `agent-ledger.json` | Per-agent spend tracking | `Record<string, AgentLedger>` |
-| `paused-agents.json` | Soft pause state | `Record<string, PauseRecord>` |
-
-**Note:** File-based persistence is for MVP only. Production should use SQLite or PostgreSQL.
+| `AgentCreated` | `create_master_treasury` | treasury_id, owner, name, initial_budget |
+| `ChildSpawned` | `spawn_child_agent` | parent_id, child_id, budget, name |
+| `BudgetReclaimed` | `reclaim_child_budget` | child_id, parent_id, amount |
+| `CallAuthorized` | `authorize_agent_call` | treasury_id, cost, provider, remaining_balance |
+| `AgentPaused` | `pause_agent` | treasury_id, reason, auto |
+| `AgentResumed` | `resume_agent` | treasury_id |
+| `FundsDeposited` | `deposit` | treasury_id, amount |
+| `FundsWithdrawn` | `withdraw` | treasury_id, amount |
 
 ---
 
@@ -593,7 +378,7 @@ Provider rates are hardcoded in `gateway.ts` (MIST per 1K tokens):
 | Anthropic | `claude-3-5-sonnet-20241022` | 800,000 |
 | Anthropic | `claude-3-haiku-20240307` | 100,000 |
 
-Restart gateway to update rates. Dynamic updates planned for v0.4.
+Restart gateway to update rates.
 
 ---
 
@@ -603,59 +388,89 @@ Restart gateway to update rates. Dynamic updates planned for v0.4.
 |-------|-----------|
 | **On-chain ownership** | `TreasuryOwnerCap` required for all treasury mutations |
 | **Non-custodial** | User signs all treasury operations; gateway only settles |
-| **Policy enforcement** | Daily/monthly/single spend caps enforced on-chain |
+| **Policy enforcement** | Daily/monthly/single spend caps enforced on-chain in Move |
 | **Provider whitelist** | Only approved providers can be called per agent |
-| **Velocity tracking** | Off-chain sliding window; auto-pause on anomaly |
+| **Velocity tracking** | Off-chain sliding window; auto-pause on burst/spike |
 | **Soft pause** | Gateway-level pause (immediate); on-chain pause via PTB |
-| **API key isolation** | Each key maps to one treasury; revoked keys are dead |
+| **API key isolation** | Each key maps to exactly one treasury; revoked keys are dead |
+| **Settlement serialization** | Per-treasury lock prevents object-lock collisions |
+| **Error classification** | Retryable errors (network, object locked) vs non-retryable (insufficient balance) |
 
 ---
 
-## Batch Settlement
+## Environment Variables
 
-Every 5 minutes, the gateway automatically settles accumulated off-chain spend to on-chain:
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SUI_RPC` | Yes | Sui RPC endpoint |
+| `PACKAGE_ID` | Yes | Deployed SEAL package ID |
+| `GATEWAY_ADDRESS` | Yes | Gateway Sui address for settlement |
+| `GATEWAY_PRIVATE_KEY` | Yes | Gateway private key for signing PTBs |
+| `PORT` | No | Gateway port (default: 3001) |
+| `GROQ_API_KEY` | Yes* | Groq API key |
+| `OPENAI_API_KEY` | No | OpenAI API key (stub if missing) |
+| `ANTHROPIC_API_KEY` | No | Anthropic API key (stub if missing) |
+
+*Required for Groq provider.
+
+---
+
+## Data Persistence
+
+The gateway stores state in JSON files under `./data/`:
+
+| File | Purpose |
+|------|---------|
+| `api-keys.json` | API key → treasuryId mappings |
+| `agent-ledger.json` | Per-agent spend tracking (reserved, spent, settlementFailures) |
+| `paused-agents.json` | Soft pause state |
+
+---
+
+## SDK Reference
+
+### TypeScript SDK
 
 ```typescript
-setInterval(runBatchSettlement, 5 * 60 * 1000);
+import { OtterAgent } from './otter-sdk';
+
+const agent = new OtterAgent({ gatewayUrl, apiKey });
+
+// Chat
+const response = await agent.chat(messages, { model, temperature, max_tokens });
+
+// Status
+const status = await agent.statusByTreasuryId(treasuryId);
+
+// Resume
+await agent.resume();
+
+// Health
+await agent.health();
 ```
 
-If settlement fails 3 times consecutively, the agent is skipped and requires manual intervention.
+### Python SDK
+
+```python
+from otter_sdk import OtterAgent, ChatMessage
+
+agent = OtterAgent(gateway_url, api_key)
+
+# Chat
+response = agent.chat(messages, model, temperature, max_tokens)
+
+# Status
+status = agent.status(treasury_id)
+
+# Resume
+agent.resume()
+
+# Health
+agent.health()
+```
 
 ---
 
-## Next Steps
+## License
 
-- [ ] Dashboard PTB integration (`create_master_treasury`, `spawn_child_agent`, `reclaim_child_budget`)
-- [ ] Tree visualization with real-time object graph
-- [ ] Parallel execution demo panel
-- [ ] SuiScan object explorer links
-- [ ] zkLogin for agent authentication (v0.4)
-- [ ] Multi-asset treasuries (USDC, NAVI LP) (v0.4)
-- [ ] Compute receipt NFTs with Kiosk (v0.4)
-```
-
----
-
-Now for testing the backend. Here's your step-by-step test plan:
-
-**Step 1: Start the gateway**
-```bash
-cd otter-gateway
-npm install
-# Create .env with your values
-npm run dev
-```
-
-**Step 2: Verify health**
-```bash
-curl http://localhost:3001/health
-```
-
-**Step 3: Test with a treasury ID**
-Since you don't have a dashboard yet, you'll need to manually create a treasury via Sui CLI or BitLab, then test the gateway endpoints.
-
-Do you want me to:
-1. **Walk you through creating a test treasury via Sui CLI** so we can test the gateway endpoints?
-2. **Move straight to the dashboard refactor** so you can create treasuries through the UI?
-
-The gateway is ready to test, but you need at least one `AgentTreasury` object ID to hit `/status/:treasuryId` or `/v1/chat`.
+MIT
