@@ -1,6 +1,12 @@
 // otter-gateway.ts
 // Otter v0.3 — Autonomous Agent Treasury Protocol
 // Gateway: provider routing, per-agent settlement, velocity tracking
+// FIXES APPLIED:
+//   1. Per-treasury settlement serialization (prevents object-lock collisions)
+//   2. Immediate ledger clear on success (no stale pending)
+//   3. Retryable vs non-retryable error classification
+//   4. Reset settlementFailures on success (agents recover)
+//   5. Detailed logging for every settlement attempt
 
 import express from 'express';
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
@@ -23,7 +29,7 @@ app.use(cors({ origin: '*' }));
 const SUI_RPC = process.env.SUI_RPC || getFullnodeUrl('testnet');
 const client = new SuiClient({ url: SUI_RPC });
 
-const PACKAGE = process.env.PACKAGE_ID!;        // Otter package ID
+const PACKAGE = process.env.PACKAGE_ID!;
 const GATEWAY_ADDR = process.env.GATEWAY_ADDRESS!;
 const gatewayKeypair = Ed25519Keypair.fromSecretKey(process.env.GATEWAY_PRIVATE_KEY!);
 const PORT = process.env.PORT || '3001';
@@ -35,7 +41,7 @@ function validateConfig() {
   if (!PACKAGE) missing.push('PACKAGE_ID');
   if (!GATEWAY_ADDR) missing.push('GATEWAY_ADDRESS');
   if (!process.env.GATEWAY_PRIVATE_KEY) missing.push('GATEWAY_PRIVATE_KEY');
-  if (!process.env.GROQ_API_KEY) console.warn('[WARN] GROQ_API_KEY not set — Groq provider unavailable');
+  if (!process.env.GROQ_API_KEY) console.warn('[WARN] GROQ_API_KEY not set');
   if (missing.length > 0) {
     console.error('[FATAL] Missing env vars:', missing.join(', '));
     process.exit(1);
@@ -57,7 +63,7 @@ const PAUSED_FILE = join(DATA_DIR, 'paused-agents.json');
 // ── PROVIDER CONFIGURATION ─────────────────────────────────────────────────
 
 interface ModelConfig {
-  costPer1kTokens: number;  // in MIST
+  costPer1kTokens: number;
 }
 
 interface ProviderConfig {
@@ -130,8 +136,8 @@ function saveJson<T>(path: string, data: T) {
 // ── API KEY STORE ──────────────────────────────────────────────────────────
 
 interface AgentApiKey {
-  wallet: string;           // ultimate owner address
-  treasuryId: string;       // the AgentTreasury object ID this key controls
+  wallet: string;
+  treasuryId: string;
   label: string;
   createdAt: number;
   revoked: boolean;
@@ -178,6 +184,22 @@ function getOrCreateLedger(treasuryId: string): AgentLedger {
     persistLedger();
   }
   return agentLedger.get(treasuryId)!;
+}
+
+// ── SETTLEMENT SERIALIZATION ───────────────────────────────────────────────
+// CRITICAL FIX: Only one settlement transaction per treasury can be in flight
+// at any time. This prevents "object already locked" errors from Sui consensus.
+
+const settlingTreasuries = new Set<string>();
+
+function acquireSettlementLock(treasuryId: string): boolean {
+  if (settlingTreasuries.has(treasuryId)) return false;
+  settlingTreasuries.add(treasuryId);
+  return true;
+}
+
+function releaseSettlementLock(treasuryId: string) {
+  settlingTreasuries.delete(treasuryId);
 }
 
 // ── SOFT PAUSE STATE ──────────────────────────────────────────────────────
@@ -315,7 +337,6 @@ async function callAnthropicStub(): Promise<{ error: string }> {
 
 // ── ENDPOINTS ──────────────────────────────────────────────────────────────
 
-// Health check
 app.get('/health', async (_req, res) => {
   res.json({
     status: 'ok',
@@ -334,7 +355,6 @@ app.get('/health', async (_req, res) => {
   });
 });
 
-// Get TreasuryOwnerCap objects for a wallet
 app.post('/caps', async (req, res) => {
   const { wallet } = req.body;
   if (!wallet) {
@@ -365,8 +385,6 @@ app.post('/caps', async (req, res) => {
   }
 });
 
-
-// Get provider list and cost rates
 app.get('/providers', async (_req, res) => {
   res.json({
     providers: Object.fromEntries(
@@ -386,16 +404,12 @@ app.get('/providers', async (_req, res) => {
   });
 });
 
-// ── AGENT TREASURY MANAGEMENT ─────────────────────────────────────────────
-
-// Create API key for an existing treasury (called after user creates treasury via dashboard PTB)
 app.post('/keys/create', async (req, res) => {
   const { wallet, treasuryId, label, allowResume = false } = req.body;
   if (!wallet || !treasuryId) {
     return res.status(400).json({ error: 'wallet and treasuryId required' });
   }
 
-  // Validate treasuryId is a valid Sui object ID format
   if (!treasuryId.match(/^0x[0-9a-fA-F]{64}$/)) {
     return res.status(400).json({ error: 'Invalid treasuryId format. Must be 0x + 64 hex chars.' });
   }
@@ -423,7 +437,6 @@ app.post('/keys/create', async (req, res) => {
   });
 });
 
-// List API keys for a wallet
 app.get('/keys/:wallet', async (req, res) => {
   const wallet = req.params.wallet;
   const keys = Array.from(apiKeys.entries())
@@ -440,7 +453,6 @@ app.get('/keys/:wallet', async (req, res) => {
   res.json({ wallet, keys });
 });
 
-// Revoke API key
 app.post('/keys/revoke', async (req, res) => {
   const { key } = req.body;
   const record = apiKeys.get(key);
@@ -452,12 +464,10 @@ app.post('/keys/revoke', async (req, res) => {
   res.json({ status: 'success', message: 'Key revoked' });
 });
 
-// Get agent status: balance, pause state, velocity, ledger
 app.get('/status/:treasuryId', async (req, res) => {
   const treasuryId = req.params.treasuryId;
 
   try {
-    // Fetch AgentTreasury object from Sui
     const obj = await client.getObject({
       id: treasuryId,
       options: { showContent: true, showOwner: true },
@@ -522,6 +532,7 @@ app.get('/status/:treasuryId', async (req, res) => {
         reserved: ledger.reserved.toString(),
         spent: ledger.spent.toString(),
         lastSettlement: ledger.lastSettlement,
+        settlementFailures: ledger.settlementFailures,
       },
     });
   } catch (err: any) {
@@ -530,12 +541,10 @@ app.get('/status/:treasuryId', async (req, res) => {
   }
 });
 
-// List all agent treasuries for a wallet (by querying objects owned by address)
 app.get('/agents/:wallet', async (req, res) => {
   const wallet = req.params.wallet;
 
   try {
-    // Query both event types
     const [createdEvents, spawnedEvents] = await Promise.all([
       client.queryEvents({
         query: { MoveEventType: `${PACKAGE}::agent_treasury::AgentCreated` },
@@ -547,10 +556,8 @@ app.get('/agents/:wallet', async (req, res) => {
       }),
     ]);
 
-    // Collect all treasury IDs for this wallet
     const treasuryMap = new Map<string, any>();
 
-    // Process AgentCreated (masters)
     for (const e of createdEvents.data) {
       if (e.parsedJson?.owner === wallet) {
         treasuryMap.set(e.parsedJson.treasury_id, {
@@ -564,7 +571,6 @@ app.get('/agents/:wallet', async (req, res) => {
       }
     }
 
-    // Process ChildSpawned (children)
     for (const e of spawnedEvents.data) {
       if (e.parsedJson?.owner === wallet) {
         treasuryMap.set(e.parsedJson.child_id, {
@@ -580,7 +586,6 @@ app.get('/agents/:wallet', async (req, res) => {
 
     const myTreasuries = Array.from(treasuryMap.values());
 
-    // Fetch current balances
     for (const t of myTreasuries) {
       try {
         const obj = await client.getObject({
@@ -600,12 +605,87 @@ app.get('/agents/:wallet', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch agents', message: err.message });
   }
 });
-// ── PROTECTED API ROUTE (AGENT KEY MODE) ─────────────────────────────────
+
+// ── CORE SETTLEMENT FUNCTION (SERIALIZED PER TREASURY) ────────────────────
+// CRITICAL: This is the heart of the fix. Settlement is now atomic per treasury.
+
+async function settleAgentCall(
+  treasuryId: string,
+  amount: bigint,
+  provider: string
+): Promise<{ success: boolean; digest?: string; error?: string; retryable: boolean }> {
+
+  // Try to acquire lock — if another settlement for this treasury is in flight, skip
+  if (!acquireSettlementLock(treasuryId)) {
+    console.log(`[SETTLEMENT] Skipping ${treasuryId}: another settlement already in flight`);
+    return { success: false, error: 'Settlement already in progress for this treasury', retryable: true };
+  }
+
+  try {
+    console.log(`[SETTLEMENT] Attempting ${amount} MIST for ${treasuryId} via ${provider}`);
+
+    const tx = new Transaction();
+    tx.setGasBudget(10_000_000); // Explicit gas budget to avoid estimation failures
+
+    tx.moveCall({
+      target: `${PACKAGE}::agent_treasury::authorize_agent_call`,
+      arguments: [
+        tx.object(treasuryId),
+        tx.pure.address(GATEWAY_ADDR),
+        tx.pure.u64(amount),
+        tx.pure.string(provider),
+        tx.object('0x6'),
+      ],
+    });
+
+    const result = await client.signAndExecuteTransaction({
+      transaction: tx,
+      signer: gatewayKeypair,
+      options: { showEffects: true, showEvents: true },
+    });
+
+    if (result.effects?.status?.status === 'success') {
+      console.log(`[SETTLEMENT] ✓ Success digest=${result.digest}`);
+      return { success: true, digest: result.digest, retryable: false };
+    } else {
+      const status = JSON.stringify(result.effects?.status);
+      console.error(`[SETTLEMENT] ✗ Transaction failed: ${status}`);
+      return { success: false, error: `Transaction failed: ${status}`, retryable: true };
+    }
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    console.error(`[SETTLEMENT] ✗ Error: ${msg}`);
+
+    // Classify errors
+    const isObjectLocked = msg.includes('already locked') || msg.includes('conflicting transaction');
+    const isInsufficientBalance = msg.includes('MoveAbort') && msg.includes('5');
+    const isGasIssue = msg.includes('gas') || msg.includes('budget');
+    const isNetwork = msg.includes('fetch') || msg.includes('timeout') || msg.includes('ECONNREFUSED');
+
+    if (isObjectLocked) {
+      return { success: false, error: 'Object locked by concurrent transaction', retryable: true };
+    }
+    if (isInsufficientBalance) {
+      return { success: false, error: 'Insufficient balance or policy violation (MoveAbort 5)', retryable: false };
+    }
+    if (isGasIssue) {
+      return { success: false, error: `Gas issue: ${msg}`, retryable: true };
+    }
+    if (isNetwork) {
+      return { success: false, error: `Network error: ${msg}`, retryable: true };
+    }
+
+    return { success: false, error: msg, retryable: true };
+  } finally {
+    releaseSettlementLock(treasuryId);
+  }
+}
+
+// ── PROTECTED API ROUTE ───────────────────────────────────────────────────
 
 app.post('/v1/chat', async (req, res) => {
   const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
 
-  // IP rate limit
   if (!checkRateLimit(ipLimits, clientIp, IP_LIMIT)) {
     return res.status(429).json({ error: 'Rate limit exceeded. Max 100 requests per minute.' });
   }
@@ -624,7 +704,6 @@ app.post('/v1/chat', async (req, res) => {
 
   const treasuryId = keyRecord.treasuryId;
 
-  // Check soft pause
   const pauseRecord = pausedAgents.get(treasuryId);
   if (pauseRecord) {
     return res.status(403).json({
@@ -636,7 +715,6 @@ app.post('/v1/chat', async (req, res) => {
     });
   }
 
-  // Treasury rate limit
   if (!checkRateLimit(treasuryLimits, treasuryId, TREASURY_LIMIT)) {
     return res.status(429).json({ error: 'Rate limit exceeded. Max 10 requests per minute per agent.' });
   }
@@ -647,7 +725,6 @@ app.post('/v1/chat', async (req, res) => {
     return res.status(400).json({ error: 'model and messages required' });
   }
 
-  // Check provider availability
   const providerInfo = getProviderForModel(model);
   if (!providerInfo) {
     return res.status(400).json({ error: `Unsupported model: ${model}. Use /providers to see available models.` });
@@ -660,7 +737,6 @@ app.post('/v1/chat', async (req, res) => {
     });
   }
 
-  // Estimate cost
   const estimatedTokens = max_tokens;
   const estimatedCost = calculateCost(model, estimatedTokens);
 
@@ -668,82 +744,65 @@ app.post('/v1/chat', async (req, res) => {
     return res.status(500).json({ error: 'Failed to calculate cost for model' });
   }
 
-  // ── FIX #1: ROBUST ON-CHAIN BALANCE CHECK ────────────────────────────────
-  // The original code had a bare catch that swallowed the real error.
-  // Now we log the full error and return it in the response.
-
+  // ── ON-CHAIN BALANCE CHECK ───────────────────────────────────────────────
   let onChainBalance: bigint;
   let objResponse: any;
 
   try {
     console.log(`[BALANCE CHECK] treasuryId=${treasuryId}, RPC=${SUI_RPC}`);
-
     objResponse = await client.getObject({
       id: treasuryId,
       options: { showContent: true },
     });
-
-    console.log(`[BALANCE CHECK] Raw response:`, JSON.stringify(objResponse, null, 2));
   } catch (err: any) {
-    console.error(`[BALANCE CHECK] RPC ERROR for treasuryId=${treasuryId}:`, err.message, err.stack);
+    console.error(`[BALANCE CHECK] RPC ERROR:`, err.message);
     return res.status(502).json({
       error: 'Failed to verify on-chain balance',
       detail: err.message,
-      treasuryId: treasuryId,
+      treasuryId,
       rpc: SUI_RPC,
-      suggestion: 'Check SUI_RPC env var matches the network where your treasury was deployed (testnet).',
     });
   }
 
-  // Check if object exists (getObject returns data: null for missing objects, doesn't throw)
   if (!objResponse || !objResponse.data) {
-    console.error(`[BALANCE CHECK] Object not found on-chain. treasuryId=${treasuryId}`);
     return res.status(404).json({
       error: 'AgentTreasury not found on-chain',
-      treasuryId: treasuryId,
+      treasuryId,
       rpc: SUI_RPC,
-      suggestion: 'This treasury ID does not exist on the current network. Verify the treasury was created on this network and the object ID is correct.',
     });
   }
 
   if (objResponse.data.content?.dataType !== 'moveObject') {
-    console.error(`[BALANCE CHECK] Object is not a moveObject. Type:`, objResponse.data.content?.dataType);
     return res.status(404).json({
       error: 'AgentTreasury not found — object is not a Move object',
       dataType: objResponse.data.content?.dataType,
-      treasuryId: treasuryId,
+      treasuryId,
     });
   }
 
   const fields = (objResponse.data.content as any).fields as any;
-
-  // FIX #2: Handle both bcs-parsed and direct field access
-  // Sui RPC sometimes returns balance as a string, sometimes as a number
   const rawBalance = fields?.balance;
   if (rawBalance === undefined || rawBalance === null) {
-    console.error(`[BALANCE CHECK] No balance field. Fields:`, JSON.stringify(fields, null, 2));
     return res.status(500).json({
       error: 'AgentTreasury object missing balance field',
-      fields: fields,
-      treasuryId: treasuryId,
-      suggestion: 'The object exists but may be the wrong type, or the Move struct has changed.',
+      fields,
+      treasuryId,
     });
   }
 
   try {
     onChainBalance = BigInt(rawBalance);
   } catch (err: any) {
-    console.error(`[BALANCE CHECK] Cannot convert balance to BigInt:`, rawBalance, typeof rawBalance);
     return res.status(500).json({
       error: 'Invalid balance format from chain',
-      rawBalance: rawBalance,
+      rawBalance,
       type: typeof rawBalance,
     });
   }
 
-  console.log(`[BALANCE CHECK] Success. Balance=${onChainBalance.toString()} MIST (${(Number(onChainBalance)/1e9).toFixed(6)} SUI)`);
+  console.log(`[BALANCE CHECK] Balance=${onChainBalance.toString()} MIST`);
 
-  // Check off-chain ledger
+  // ── LEDGER CHECK ─────────────────────────────────────────────────────────
   const ledger = getOrCreateLedger(treasuryId);
   const available = onChainBalance - ledger.reserved - ledger.spent;
 
@@ -762,7 +821,7 @@ app.post('/v1/chat', async (req, res) => {
   ledger.reserved += estimatedCost;
   persistLedger();
 
-  // Call provider
+  // ── CALL PROVIDER ────────────────────────────────────────────────────────
   let providerResponse;
   try {
     if (providerInfo.provider === 'groq') {
@@ -788,7 +847,7 @@ app.post('/v1/chat', async (req, res) => {
     return res.status(502).json({ error: 'Provider error', details: providerResponse.error });
   }
 
-  // Calculate actual cost
+  // ── CALCULATE ACTUAL COST ────────────────────────────────────────────────
   const actualTokens = providerResponse.usage?.total_tokens || estimatedTokens;
   const actualCost = calculateCost(model, actualTokens);
 
@@ -797,39 +856,39 @@ app.post('/v1/chat', async (req, res) => {
   ledger.spent += actualCost;
   persistLedger();
 
-  // Settle on-chain via authorize_agent_call PTB
-  let settlementDigest: string | null = null;
-  let settlementError: string | null = null;
+  console.log(`[LEDGER] treasury=${treasuryId} reserved=${ledger.reserved} spent=${ledger.spent}`);
 
-  try {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${PACKAGE}::agent_treasury::authorize_agent_call`,
-      arguments: [
-        tx.object(treasuryId),
-        tx.pure.address(GATEWAY_ADDR),
-        tx.pure.u64(actualCost),
-        tx.pure.string(providerInfo.provider),
-        tx.object('0x6'), // Clock
-      ],
-    });
+  // ── IMMEDIATE SETTLEMENT ─────────────────────────────────────────────────
+  // CRITICAL FIX: Settle immediately, don't wait for batch. This prevents
+  // the ledger from growing stale and hitting MoveAbort on insufficient balance.
 
-    const result = await client.signAndExecuteTransaction({
-      transaction: tx,
-      signer: gatewayKeypair,
-      options: { showEffects: true, showEvents: true },
-    });
+  let settlementResult = await settleAgentCall(treasuryId, actualCost, providerInfo.provider);
 
-    settlementDigest = result.digest;
-    console.log(`[SETTLEMENT] Success digest=${result.digest}, cost=${actualCost} MIST`);
-  } catch (err: any) {
-    settlementError = err.message;
-    console.error('[SETTLEMENT] Failed:', err.message);
-    ledger.settlementFailures++;
+  if (settlementResult.success && settlementResult.digest) {
+    // CRITICAL FIX: Clear spent immediately on success so we never double-settle
+    ledger.spent = 0n;
+    ledger.settlementFailures = 0;
+    ledger.lastSettlement = Date.now();
     persistLedger();
+    console.log(`[SETTLEMENT] ✓ Cleared ledger for ${treasuryId}`);
+  } else {
+    // Settlement failed — handle based on error type
+    if (!settlementResult.retryable) {
+      // Non-retryable: balance/policy issue. Clear the ledger to prevent
+      // repeated failures. The on-chain state is the source of truth.
+      console.warn(`[SETTLEMENT] Non-retryable failure for ${treasuryId}: ${settlementResult.error}. Clearing ledger.`);
+      ledger.spent = 0n;
+      ledger.settlementFailures = 0;
+      persistLedger();
+    } else {
+      // Retryable: keep spent in ledger for batch settlement to retry
+      ledger.settlementFailures++;
+      persistLedger();
+      console.warn(`[SETTLEMENT] Retryable failure #${ledger.settlementFailures} for ${treasuryId}: ${settlementResult.error}`);
+    }
   }
 
-  // Velocity check
+  // ── VELOCITY CHECK ───────────────────────────────────────────────────────
   const velocityCheck = checkVelocity(treasuryId);
   if (velocityCheck.triggered) {
     pausedAgents.set(treasuryId, {
@@ -839,11 +898,10 @@ app.post('/v1/chat', async (req, res) => {
     });
     persistPaused();
     treasuryLimits.delete(treasuryId);
-
     console.log(`[AUTO-PAUSE] Agent ${treasuryId}: ${velocityCheck.reason}`);
   }
 
-  // Return response
+  // ── RETURN RESPONSE ────────────────────────────────────────────────────────
   res.json({
     status: 'success',
     model: providerResponse.model,
@@ -855,8 +913,10 @@ app.post('/v1/chat', async (req, res) => {
       currency: 'MIST',
     },
     settlement: {
-      digest: settlementDigest,
-      error: settlementError,
+      digest: settlementResult.success ? settlementResult.digest : null,
+      error: settlementResult.error || null,
+      settled: settlementResult.success,
+      retryable: settlementResult.retryable,
       pending: ledger.spent.toString(),
       lastSettled: ledger.lastSettlement,
     },
@@ -870,7 +930,6 @@ app.post('/v1/chat', async (req, res) => {
 
 // ── RESUME ENDPOINTS ────────────────────────────────────────────────────────
 
-// Resume via API key (if allowResume is true)
 app.post('/resume', async (req, res) => {
   const authHeader = req.headers['authorization'] as string;
   if (!authHeader?.startsWith('Bearer ')) {
@@ -907,7 +966,6 @@ app.post('/resume', async (req, res) => {
   });
 });
 
-// Resume via wallet address (dashboard)
 app.post('/resume/:treasuryId', async (req, res) => {
   const treasuryId = req.params.treasuryId;
   const pauseRecord = pausedAgents.get(treasuryId);
@@ -926,60 +984,52 @@ app.post('/resume/:treasuryId', async (req, res) => {
   });
 });
 
-// ── BATCH SETTLEMENT ─────────────────────────────────────────────────────
+// ── BATCH SETTLEMENT (BACKGROUND CLEANUP) ────────────────────────────────
+// This now only handles retryable failures from the immediate settlement.
+// Most settlements should succeed immediately in /v1/chat.
 
-const SETTLEMENT_INTERVAL = 5 * 60 * 1000;
-const MAX_SETTLEMENT_FAILURES = 3;
+const SETTLEMENT_INTERVAL = 2 * 60 * 1000; // Every 2 minutes (was 5)
+const MAX_SETTLEMENT_FAILURES = 5; // Was 3, increased because we reset on success
 
 async function runBatchSettlement() {
-  console.log('[SETTLEMENT] Running batch settlement...');
+  console.log('[BATCH] Running background settlement cleanup...');
+  let processed = 0;
+  let succeeded = 0;
 
   for (const [treasuryId, ledger] of agentLedger.entries()) {
     if (ledger.spent === 0n) continue;
     if (ledger.settlementFailures >= MAX_SETTLEMENT_FAILURES) {
-      console.warn(`[SETTLEMENT] Skipping ${treasuryId}: ${ledger.settlementFailures} consecutive failures.`);
+      console.warn(`[BATCH] Skipping ${treasuryId}: ${ledger.settlementFailures} consecutive failures.`);
       continue;
     }
 
     const amount = ledger.spent;
-    console.log(`[SETTLEMENT] Settling ${amount} MIST for agent ${treasuryId}`);
+    console.log(`[BATCH] Retrying ${amount} MIST for agent ${treasuryId}`);
 
-    try {
-      const tx = new Transaction();
-      tx.moveCall({
-        target: `${PACKAGE}::agent_treasury::authorize_agent_call`,
-        arguments: [
-          tx.object(treasuryId),
-          tx.pure.address(GATEWAY_ADDR),
-          tx.pure.u64(amount),
-          tx.pure.string('batch'),
-          tx.object('0x6'),
-        ],
-      });
+    const result = await settleAgentCall(treasuryId, amount, 'batch');
+    processed++;
 
-      const result = await client.signAndExecuteTransaction({
-        transaction: tx,
-        signer: gatewayKeypair,
-        options: { showEffects: true, showEvents: true },
-      });
-
-      if (result.effects?.status?.status === 'success') {
-        ledger.spent = 0n;
-        ledger.settlementFailures = 0;
-        ledger.lastSettlement = Date.now();
-        persistLedger();
-        console.log(`[SETTLEMENT] Success: ${result.digest}`);
-      } else {
-        ledger.settlementFailures++;
-        persistLedger();
-        console.error(`[SETTLEMENT] Failed for ${treasuryId}:`, result.effects?.status);
-      }
-    } catch (err: any) {
+    if (result.success) {
+      ledger.spent = 0n;
+      ledger.settlementFailures = 0;
+      ledger.lastSettlement = Date.now();
+      persistLedger();
+      succeeded++;
+      console.log(`[BATCH] ✓ Success: ${result.digest}`);
+    } else if (!result.retryable) {
+      // Non-retryable: clear and move on
+      console.warn(`[BATCH] Non-retryable for ${treasuryId}: ${result.error}. Clearing.`);
+      ledger.spent = 0n;
+      ledger.settlementFailures = 0;
+      persistLedger();
+    } else {
       ledger.settlementFailures++;
       persistLedger();
-      console.error(`[SETTLEMENT] Error for ${treasuryId}:`, err.message);
+      console.error(`[BATCH] ✗ Retryable failure #${ledger.settlementFailures}: ${result.error}`);
     }
   }
+
+  console.log(`[BATCH] Done. Processed: ${processed}, Succeeded: ${succeeded}`);
 }
 
 setInterval(runBatchSettlement, SETTLEMENT_INTERVAL);
@@ -989,9 +1039,10 @@ setInterval(runBatchSettlement, SETTLEMENT_INTERVAL);
 validateConfig();
 
 app.listen(PORT, () => {
-  console.log(`Otter Gateway v0.3.0 running on http://localhost:${PORT}`);
+  console.log(`Otter Gateway v0.3.1 (HARDENED) running on http://localhost:${PORT}`);
   console.log(`Package: ${PACKAGE}`);
   console.log(`Gateway: ${GATEWAY_ADDR}`);
   console.log(`Providers: ${Object.keys(PROVIDERS).join(', ')}`);
   console.log(`Data directory: ${DATA_DIR}`);
+  console.log(`Settlement interval: ${SETTLEMENT_INTERVAL / 1000}s`);
 });
