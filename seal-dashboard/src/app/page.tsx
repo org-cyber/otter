@@ -8,13 +8,16 @@ import {
 } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
 
-const GATEWAY_URL = 'http://localhost:3001';
+// ── CONFIG: Change this to your deployed gateway URL ────────────────────────
+// Local dev:  http://localhost:3001
+// Deployed:   https://your-gateway.onrender.com (or wherever you host it)
+const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:3001';
+
 const SUI_SCAN = 'https://suiscan.xyz/testnet/object';
 
-
+// ── PACKAGE ID: Must match the network you're connected to ──────────────────
+// Testnet package ID — update this after each contract redeploy
 const PACKAGE_ID = '0xdbfb39eabe0938cb1495443b733e00bd90799a6d5ea870227d9f0e426091b480';
-
-
 
 // ── TYPES ───────────────────────────────────────────────────────────────────
 
@@ -67,34 +70,29 @@ export default function Home() {
   const [selectedTreasury, setSelectedTreasury] = useState<string | null>(null);
   const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
   const [providers, setProviders] = useState<Record<string, ProviderInfo>>({});
-  const [ownerCaps, setOwnerCaps] = useState<Record<string, string>>({}); // treasuryId -> capObjectId
-  
+  const [ownerCaps, setOwnerCaps] = useState<Record<string, string>>({});
+
   const [newTreasuryName, setNewTreasuryName] = useState('');
   const [newTreasuryDeposit, setNewTreasuryDeposit] = useState('0.05');
-  
+
   const [spawnParentId, setSpawnParentId] = useState('');
   const [spawnName, setSpawnName] = useState('');
   const [spawnBudget, setSpawnBudget] = useState('0.01');
   const [spawnDailyCap, setSpawnDailyCap] = useState('5000000');
   const [spawnProviders, setSpawnProviders] = useState<string[]>(['groq']);
-  
-  const [newKeyLabel, setNewKeyLabel] = useState('');
-  const [allowKeyResume, setAllowKeyResume] = useState(false);
-  const [newKey, setNewKey] = useState<string | null>(null);
-  
+
   const [prompt1, setPrompt1] = useState('');
   const [prompt2, setPrompt2] = useState('');
   const [prompt3, setPrompt3] = useState('');
   const [parallelResults, setParallelResults] = useState<any[]>([]);
   const [parallelLoading, setParallelLoading] = useState(false);
-  
+
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // ── FETCH OWNER CAPS ───────────────────────────────────────────────────────
 
-     const fetchOwnerCaps = useCallback(async () => {
+  const fetchOwnerCaps = useCallback(async () => {
     if (!wallet) return;
     try {
       const res = await fetch(`${GATEWAY_URL}/caps`, {
@@ -117,17 +115,17 @@ export default function Home() {
       const res = await fetch(`${GATEWAY_URL}/agents/${wallet}`);
       const data = await res.json();
       const list = data.treasuries || [];
-      
+
       const masters = list.filter((t: any) => !t.parent);
       const children = list.filter((t: any) => t.parent);
-      
+
       const tree: TreasuryNode[] = masters.map((m: any) => ({
         ...m,
         children: children
           .filter((c: any) => c.parent === m.id)
           .map((c: any) => ({ ...c, children: [] })),
       }));
-      
+
       setTreasuries(tree);
     } catch (err) {
       console.error('Treasuries fetch error:', err);
@@ -163,7 +161,7 @@ export default function Home() {
     refreshApiKeys();
     refreshProviders();
     fetchOwnerCaps();
-    
+
     const interval = setInterval(() => {
       refreshTreasuries();
       fetchOwnerCaps();
@@ -184,7 +182,7 @@ export default function Home() {
 
     try {
       const depositMist = BigInt(Math.floor(parseFloat(newTreasuryDeposit) * 1e9));
-      
+
       const tx = new Transaction();
       tx.setGasBudget(10_000_000);
 
@@ -222,7 +220,7 @@ export default function Home() {
             await fetchOwnerCaps();
             setLoading(prev => ({ ...prev, createTreasury: false }));
           },
-          onError: (err) => {
+          onError: (err: any) => {
             setError('Create treasury failed: ' + err.message);
             setLoading(prev => ({ ...prev, createTreasury: false }));
           },
@@ -253,12 +251,9 @@ export default function Home() {
 
     try {
       const budgetMist = BigInt(Math.floor(parseFloat(spawnBudget) * 1e9));
-      
+
       const tx = new Transaction();
       tx.setGasBudget(10_000_000);
-
-      const parentCap = tx.object(parentCapId);
-      const parentTreasury = tx.object(spawnParentId);
 
       const childPolicy = tx.moveCall({
         target: `${PACKAGE_ID}::agent_treasury::create_policy`,
@@ -274,8 +269,8 @@ export default function Home() {
       tx.moveCall({
         target: `${PACKAGE_ID}::agent_treasury::spawn_child_agent`,
         arguments: [
-          parentCap,
-          parentTreasury,
+          tx.object(parentCapId),
+          tx.object(spawnParentId),
           tx.pure.u64(budgetMist),
           tx.pure.string(spawnName || 'Child Agent'),
           childPolicy,
@@ -296,7 +291,7 @@ export default function Home() {
             await fetchOwnerCaps();
             setLoading(prev => ({ ...prev, spawnChild: false }));
           },
-          onError: (err) => {
+          onError: (err: any) => {
             setError('Spawn failed: ' + err.message);
             setLoading(prev => ({ ...prev, spawnChild: false }));
           },
@@ -326,16 +321,12 @@ export default function Home() {
       const tx = new Transaction();
       tx.setGasBudget(10_000_000);
 
-      const parentCap = tx.object(parentCapId);
-      const parentTreasury = tx.object(parentId);
-      const childTreasury = tx.object(childId);
-
       tx.moveCall({
         target: `${PACKAGE_ID}::agent_treasury::reclaim_child_budget`,
         arguments: [
-          parentCap,
-          parentTreasury,
-          childTreasury,
+          tx.object(parentCapId),
+          tx.object(parentId),
+          tx.object(childId),
           tx.object('0x6'),
         ],
       });
@@ -349,7 +340,7 @@ export default function Home() {
             await fetchOwnerCaps();
             setLoading(prev => ({ ...prev, [`reclaim_${childId}`]: false }));
           },
-          onError: (err) => {
+          onError: (err: any) => {
             setError('Reclaim failed: ' + err.message);
             setLoading(prev => ({ ...prev, [`reclaim_${childId}`]: false }));
           },
@@ -363,10 +354,14 @@ export default function Home() {
 
   // ── CREATE API KEY ─────────────────────────────────────────────────────
 
-  const handleCreateKey = async (treasuryId: string) => {
-    if (!wallet) return;
+  const handleCreateKey = async (
+    treasuryId: string,
+    label: string,
+    allowResume: boolean
+  ): Promise<string | null> => {
+    if (!wallet) return null;
+
     setLoading(prev => ({ ...prev, [`key_${treasuryId}`]: true }));
-    setNewKey(null);
 
     try {
       const res = await fetch(`${GATEWAY_URL}/keys/create`, {
@@ -375,21 +370,28 @@ export default function Home() {
         body: JSON.stringify({
           wallet,
           treasuryId,
-          label: newKeyLabel || 'default',
-          allowResume: allowKeyResume,
+          label: label || 'default',
+          allowResume,
         }),
       });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP ${res.status}`);
+      }
+
       const data = await res.json();
+
       if (data.status === 'success') {
-        setNewKey(data.key);
-        setNewKeyLabel('');
-        setAllowKeyResume(false);
         await refreshApiKeys();
+        return data.key;
       } else {
-        setError('Failed to create key: ' + (data.error || 'Unknown error'));
+        setError(data.error || 'Failed to create key');
+        return null;
       }
     } catch (err: any) {
-      setError('Error: ' + err.message);
+      setError(err.message);
+      return null;
     } finally {
       setLoading(prev => ({ ...prev, [`key_${treasuryId}`]: false }));
     }
@@ -445,7 +447,7 @@ export default function Home() {
     }
 
     const prompts = [prompt1, prompt2, prompt3];
-    
+
     const results = await Promise.all(
       eligibleTreasuries.map((t, i) => 
         handleParallelCall(t.id, prompts[i] || 'Hello', i)
@@ -515,11 +517,16 @@ export default function Home() {
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 {treasuries.map(master => (
-                  <TreasuryTreeNode key={master.id} node={master} onSpawn={setSpawnParentId} onReclaim={handleReclaimChild}
-                    onCreateKey={handleCreateKey} onSelect={setSelectedTreasury} selected={selectedTreasury}
-                    loading={loading} newKey={newKey} copiedKey={copiedKey} setCopiedKey={setCopiedKey}
-                    apiKeys={apiKeys} newKeyLabel={newKeyLabel} setNewKeyLabel={setNewKeyLabel}
-                    allowKeyResume={allowKeyResume} setAllowKeyResume={setAllowKeyResume} setNewKey={setNewKey}
+                  <TreasuryTreeNode
+                    key={master.id}
+                    node={master}
+                    onSpawn={setSpawnParentId}
+                    onReclaim={handleReclaimChild}
+                    onCreateKey={handleCreateKey}
+                    onSelect={setSelectedTreasury}
+                    selected={selectedTreasury}
+                    loading={loading}
+                    apiKeys={apiKeys}
                   />
                 ))}
               </div>
@@ -555,7 +562,7 @@ export default function Home() {
           <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24 }}>
             <h2 style={{ fontSize: 18, marginBottom: 16 }}>⚡ Parallel Agent Execution</h2>
             <p style={{ color: '#888', fontSize: 12, marginBottom: 12 }}>Fire prompts to multiple agents simultaneously. Each agent spends from its own object-held balance.</p>
-            
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
               {[prompt1, prompt2, prompt3].map((p, i) => (
                 <div key={i}>
@@ -623,7 +630,10 @@ export default function Home() {
             <div style={{ marginTop: 16, padding: 12, background: '#0a0a0a', borderRadius: 6 }}>
               <div style={{ color: '#888', fontSize: 12, marginBottom: 8 }}>Example usage:</div>
               <code style={{ fontSize: 11, color: '#00d4aa', fontFamily: 'monospace', display: 'block', whiteSpace: 'pre-wrap' }}>
-                {`curl -X POST ${GATEWAY_URL}/v1/chat \\\n  -H "Authorization: Bearer otter_..." \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"llama-3.1-8b-instant","messages":[{"role":"user","content":"Hello"}]}'`}
+                {`curl -X POST ${GATEWAY_URL}/v1/chat \\
+  -H "Authorization: Bearer otter_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"llama-3.1-8b-instant","messages":[{"role":"user","content":"Hello"}]}'`}
               </code>
             </div>
           </div>
@@ -636,11 +646,20 @@ export default function Home() {
 // ── TREASURY TREE NODE ─────────────────────────────────────────────────────
 
 function TreasuryTreeNode({
-  node, onSpawn, onReclaim, onCreateKey, onSelect, selected, loading,
-  newKey, copiedKey, setCopiedKey, apiKeys, newKeyLabel, setNewKeyLabel,
-  allowKeyResume, setAllowKeyResume, setNewKey,
+  node,
+  onSpawn,
+  onReclaim,
+  onCreateKey,
+  onSelect,
+  selected,
+  loading,
+  apiKeys,
 }: any) {
   const isSelected = selected === node.id;
+  const [keyLabel, setKeyLabel] = useState('');
+  const [allowResume, setAllowResume] = useState(false);
+  const [newKey, setNewKey] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const nodeKeys = apiKeys.filter((k: any) => k.treasuryId === node.id && !k.revoked);
   const isChild = !!node.parent;
 
@@ -648,7 +667,7 @@ function TreasuryTreeNode({
     <div style={{ marginLeft: isChild ? 24 : 0, borderLeft: isChild ? '2px solid #333' : 'none', paddingLeft: isChild ? 12 : 0 }}>
       <div onClick={() => onSelect(isSelected ? null : node.id)}
         style={{ background: isSelected ? '#1a2a1a' : '#1a1a1a', border: isSelected ? '1px solid #00d4aa' : '1px solid #222', padding: 16, borderRadius: 10, cursor: 'pointer' }}>
-        
+
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
           <div>
             <div style={{ fontWeight: 'bold', fontSize: 15, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -682,30 +701,64 @@ function TreasuryTreeNode({
               {loading[`reclaim_${node.id}`] ? 'Reclaiming...' : '↩ Reclaim'}
             </button>
           )}
-          <button onClick={(e: any) => { e.stopPropagation(); onCreateKey(node.id); }}
+          <button
+            onClick={async (e: any) => {
+              e.stopPropagation();
+              const key = await onCreateKey(node.id, keyLabel, allowResume);
+              if (key) {
+                setNewKey(key);
+                setKeyLabel('');
+                setAllowResume(false);
+              }
+            }}
             disabled={loading[`key_${node.id}`]}
-            style={{ padding: '6px 12px', fontSize: 12, background: loading[`key_${node.id}`] ? '#333' : '#0066cc', color: '#fff', border: 'none', borderRadius: 4, cursor: loading[`key_${node.id}`] ? 'not-allowed' : 'pointer' }}>
+            style={{
+              padding: '6px 12px',
+              fontSize: 12,
+              background: loading[`key_${node.id}`] ? '#333' : '#00d4aa',
+              color: loading[`key_${node.id}`] ? '#888' : '#000',
+              border: 'none',
+              borderRadius: 4,
+              cursor: loading[`key_${node.id}`] ? 'not-allowed' : 'pointer',
+              fontWeight: 'bold',
+            }}
+          >
             {loading[`key_${node.id}`] ? 'Creating...' : '🔑 Create Key'}
           </button>
         </div>
 
         {isSelected && (
-          <div style={{ marginTop: 12, padding: 12, background: '#0a0a0a', borderRadius: 6 }}>
+          <div 
+            onClick={(e: any) => e.stopPropagation()}
+            style={{ marginTop: 12, padding: 12, background: '#0a0a0a', borderRadius: 6 }}
+          >
             <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-              <input type="text" placeholder="Key label" value={newKeyLabel} onChange={(e: any) => setNewKeyLabel(e.target.value)}
+              <input
+                type="text"
+                placeholder="Key label"
+                value={keyLabel}
+                onChange={(e: any) => setKeyLabel(e.target.value)}
+                onClick={(e: any) => e.stopPropagation()}
                 style={{ flex: 1, padding: 8, background: '#1a1a1a', border: '1px solid #333', borderRadius: 4, color: '#fff', fontSize: 12 }} />
               <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#888' }}>
-                <input type="checkbox" checked={allowKeyResume} onChange={(e: any) => setAllowKeyResume(e.target.checked)} />
+                <input
+                  type="checkbox"
+                  checked={allowResume}
+                  onChange={(e: any) => setAllowResume(e.target.checked)} onClick={(e: any) => e.stopPropagation()} />
                 Allow resume
               </label>
             </div>
-            {newKey && nodeKeys.length === 0 && (
+            {newKey && (
               <div style={{ background: '#0a2a1a', border: '1px solid #00d4aa', padding: 12, borderRadius: 6 }}>
                 <div style={{ color: '#00d4aa', fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>🔐 API Key Created</div>
                 <div style={{ fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all', color: '#fff' }}>{newKey}</div>
-                <button onClick={() => { copyToClipboard(newKey!); setCopiedKey(newKey); setTimeout(() => setCopiedKey(null), 2000); }}
+                <button onClick={() => {
+                  copyToClipboard(newKey!);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                }}
                   style={{ marginTop: 8, padding: '4px 8px', fontSize: 11, background: '#00d4aa', color: '#000', border: 'none', borderRadius: 4, cursor: 'pointer' }}>
-                  {copiedKey === newKey ? '✓ Copied!' : 'Copy'}
+                  {copied ? '✓ Copied!' : 'Copy'}
                 </button>
               </div>
             )}
@@ -717,10 +770,17 @@ function TreasuryTreeNode({
       {node.children?.length > 0 && (
         <div style={{ marginTop: 12 }}>
           {node.children.map((child: any) => (
-            <TreasuryTreeNode key={child.id} node={child} onSpawn={onSpawn} onReclaim={onReclaim} onCreateKey={onCreateKey}
-              onSelect={onSelect} selected={selected} loading={loading} newKey={newKey} copiedKey={copiedKey} setCopiedKey={setCopiedKey}
-              apiKeys={apiKeys} newKeyLabel={newKeyLabel} setNewKeyLabel={setNewKeyLabel} allowKeyResume={allowKeyResume}
-              setAllowKeyResume={setAllowKeyResume} setNewKey={setNewKey} />
+            <TreasuryTreeNode
+              key={child.id}
+              node={child}
+              onSpawn={onSpawn}
+              onReclaim={onReclaim}
+              onCreateKey={onCreateKey}
+              onSelect={onSelect}
+              selected={selected}
+              loading={loading}
+              apiKeys={apiKeys}
+            />
           ))}
         </div>
       )}

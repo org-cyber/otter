@@ -134,5 +134,197 @@
     "createdAt": 1781963250549,
     "revoked": false,
     "allowResume": false
+  },
+  "otter_G5j3hMf1q3YNqcn1ZF8npJbxRlKxwoGA": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x1b9e83ace9891ff07d55fdeba90a025cda344f07e4c696d258c2e63f9a4a7cc5",
+    "label": "Trading bot Key",
+    "createdAt": 1781964838719,
+    "revoked": false,
+    "allowResume": true
+  },
+  "otter_fLz2QsBOAMLOVdjHQNdxumFzhohpWEqP": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x1b9e83ace9891ff07d55fdeba90a025cda344f07e4c696d258c2e63f9a4a7cc5",
+    "label": "trading bot key",
+    "createdAt": 1781964869363,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_oxhpkZKTC_zA1UlNRjCLgXMGcQ-eWlU-": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x1b9e83ace9891ff07d55fdeba90a025cda344f07e4c696d258c2e63f9a4a7cc5",
+    "label": "key",
+    "createdAt": 1781964899704,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_UDpaEHvYKl13952frAw_HB0lt_IiIwb4": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x1b9e83ace9891ff07d55fdeba90a025cda344f07e4c696d258c2e63f9a4a7cc5",
+    "label": "trading bot key",
+    "createdAt": 1781964949460,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_bwNkkJo9ajobbevIJjHnnpYpr3fe4ZwP": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x1b9e83ace9891ff07d55fdeba90a025cda344f07e4c696d258c2e63f9a4a7cc5",
+    "label": "trading bot key",
+    "createdAt": 1781965807050,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_BfMHVmIWSplVdOiDyuec41XzmJFQfaAM": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x8e4da12354db133833515037af90f3ad610f134bd6233692645c01a9b67cc04b",
+    "label": "default",
+    "createdAt": 1781966098105,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_7rMd08Xywqo1SnuVhg6i60YioZcAB1Nr": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x8e4da12354db133833515037af90f3ad610f134bd6233692645c01a9b67cc04b",
+    "label": "Research agent key",
+    "createdAt": 1781966405907,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_QqcUC4HDtMmHKFjhiqEWguOn8waWKBrb": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0xdd1d58d3c62798bdb79a86d44aff903b19e59b72c3e01372144144ee63d25bfc",
+    "label": "default",
+    "createdAt": 1781968853702,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_ldBvB5D4ffCaIl2cBaPe4V7GfEB2HpzF": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x1b9e83ace9891ff07d55fdeba90a025cda344f07e4c696d258c2e63f9a4a7cc5",
+    "label": "default",
+    "createdAt": 1781968868734,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_rIzqie4G2ZUXbL6sIoW-f8HsxaPBZZCv": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x1b9e83ace9891ff07d55fdeba90a025cda344f07e4c696d258c2e63f9a4a7cc5",
+    "label": "default",
+    "createdAt": 1781968868924,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter__FsJSFcOqT86N09H13YjtGDnKax5gHMd": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x1b9e83ace9891ff07d55fdeba90a025cda344f07e4c696d258c2e63f9a4a7cc5",
+    "label": "default",
+    "createdAt": 1781968869123,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_Iw4jKadIIw0Ai3wY9Ai2s2hsXE4Lqvb1": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x1b9e83ace9891ff07d55fdeba90a025cda344f07e4c696d258c2e63f9a4a7cc5",
+    "label": "default",
+    "createdAt": 1781968869398,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_MG3-_tMQPsYECyEh7Vv_ReA4aNrkTptE": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x1b9e83ace9891ff07d55fdeba90a025cda344f07e4c696d258c2e63f9a4a7cc5",
+    "label": "default",
+    "createdAt": 1781968871072,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_G8fZWLu0vxweFY0knEbJ2gkyPFV_Y2ud": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x8e4da12354db133833515037af90f3ad610f134bd6233692645c01a9b67cc04b",
+    "label": "default",
+    "createdAt": 1781969009046,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_62QnDYC2vdczglK4TN3yjIb6lq19d7Bu": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x8e4da12354db133833515037af90f3ad610f134bd6233692645c01a9b67cc04b",
+    "label": "default",
+    "createdAt": 1781969009811,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_LUeKBKu1qAqSxBX8Bd4mdeQ1K0Bx2x_Q": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x8e4da12354db133833515037af90f3ad610f134bd6233692645c01a9b67cc04b",
+    "label": "default",
+    "createdAt": 1781969009973,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_S1d9IMnTng7zSnfuUAGpwINnUeHBhe0p": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0xff058668802eac6c7e6a2a1e68a39d8cc22057d518b2c39fc9508366d88c49f7",
+    "label": "default",
+    "createdAt": 1781969012630,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_WCNvfVZ3vPZBgOxhrDLkrBYpkMKNa5mS": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0xff058668802eac6c7e6a2a1e68a39d8cc22057d518b2c39fc9508366d88c49f7",
+    "label": "default",
+    "createdAt": 1781969012803,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_GLarUKu8_qz2R8tsBaqLmcoZu-la23f-": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0xff058668802eac6c7e6a2a1e68a39d8cc22057d518b2c39fc9508366d88c49f7",
+    "label": "default",
+    "createdAt": 1781969015162,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_7b2Kr7NOMT5OuIIq3FbSIwyEv3F_0eau": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0xff058668802eac6c7e6a2a1e68a39d8cc22057d518b2c39fc9508366d88c49f7",
+    "label": "default",
+    "createdAt": 1781969015317,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_WiKxHdNsqLJhzLkCrstfE02FkoyCZvsa": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0xdd1d58d3c62798bdb79a86d44aff903b19e59b72c3e01372144144ee63d25bfc",
+    "label": "support agent",
+    "createdAt": 1781969063235,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_gmIkRsRossxM7bDmhxsir7qYEtPQYxfM": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0xdd1d58d3c62798bdb79a86d44aff903b19e59b72c3e01372144144ee63d25bfc",
+    "label": "support agent",
+    "createdAt": 1781970301601,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_8nYbBcJihy_-mFh_uPtb0Fwv7cXVEQyF": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0x8e4da12354db133833515037af90f3ad610f134bd6233692645c01a9b67cc04b",
+    "label": "research agent key",
+    "createdAt": 1781970331359,
+    "revoked": false,
+    "allowResume": false
+  },
+  "otter_LfVsI4yRLU-4gxy5memht9xrq0A9z0rY": {
+    "wallet": "0x28441bfc3fe1f98e0dec5755322210c24d67054a23bacec2299f6d2f88fe8d47",
+    "treasuryId": "0xdd1d58d3c62798bdb79a86d44aff903b19e59b72c3e01372144144ee63d25bfc",
+    "label": "support agent",
+    "createdAt": 1781973555748,
+    "revoked": false,
+    "allowResume": false
   }
 }

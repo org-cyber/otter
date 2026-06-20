@@ -20,12 +20,30 @@ const app = express();
 app.use(express.json());
 app.use(cors({ origin: '*' }));
 
-const client = new SuiClient({ url: process.env.SUI_RPC || getFullnodeUrl('testnet') });
+const SUI_RPC = process.env.SUI_RPC || getFullnodeUrl('testnet');
+const client = new SuiClient({ url: SUI_RPC });
 
 const PACKAGE = process.env.PACKAGE_ID!;        // Otter package ID
 const GATEWAY_ADDR = process.env.GATEWAY_ADDRESS!;
 const gatewayKeypair = Ed25519Keypair.fromSecretKey(process.env.GATEWAY_PRIVATE_KEY!);
 const PORT = process.env.PORT || '3001';
+
+// ── STARTUP VALIDATION ─────────────────────────────────────────────────────
+
+function validateConfig() {
+  const missing: string[] = [];
+  if (!PACKAGE) missing.push('PACKAGE_ID');
+  if (!GATEWAY_ADDR) missing.push('GATEWAY_ADDRESS');
+  if (!process.env.GATEWAY_PRIVATE_KEY) missing.push('GATEWAY_PRIVATE_KEY');
+  if (!process.env.GROQ_API_KEY) console.warn('[WARN] GROQ_API_KEY not set — Groq provider unavailable');
+  if (missing.length > 0) {
+    console.error('[FATAL] Missing env vars:', missing.join(', '));
+    process.exit(1);
+  }
+  console.log('[CONFIG] RPC:', SUI_RPC);
+  console.log('[CONFIG] Package:', PACKAGE);
+  console.log('[CONFIG] Gateway:', GATEWAY_ADDR);
+}
 
 // ── DATA DIRECTORY ────────────────────────────────────────────────────────
 
@@ -303,6 +321,7 @@ app.get('/health', async (_req, res) => {
     status: 'ok',
     package: PACKAGE,
     gateway: GATEWAY_ADDR,
+    rpc: SUI_RPC,
     providers: Object.fromEntries(
       Object.entries(PROVIDERS).map(([name, config]) => [
         name,
@@ -374,6 +393,11 @@ app.post('/keys/create', async (req, res) => {
   const { wallet, treasuryId, label, allowResume = false } = req.body;
   if (!wallet || !treasuryId) {
     return res.status(400).json({ error: 'wallet and treasuryId required' });
+  }
+
+  // Validate treasuryId is a valid Sui object ID format
+  if (!treasuryId.match(/^0x[0-9a-fA-F]{64}$/)) {
+    return res.status(400).json({ error: 'Invalid treasuryId format. Must be 0x + 64 hex chars.' });
   }
 
   const key = generateApiKey();
@@ -644,23 +668,80 @@ app.post('/v1/chat', async (req, res) => {
     return res.status(500).json({ error: 'Failed to calculate cost for model' });
   }
 
-  // Check on-chain balance via object read
+  // ── FIX #1: ROBUST ON-CHAIN BALANCE CHECK ────────────────────────────────
+  // The original code had a bare catch that swallowed the real error.
+  // Now we log the full error and return it in the response.
+
   let onChainBalance: bigint;
+  let objResponse: any;
+
   try {
-    const obj = await client.getObject({
+    console.log(`[BALANCE CHECK] treasuryId=${treasuryId}, RPC=${SUI_RPC}`);
+
+    objResponse = await client.getObject({
       id: treasuryId,
       options: { showContent: true },
     });
 
-    if (!obj.data || obj.data.content?.dataType !== 'moveObject') {
-      return res.status(404).json({ error: 'AgentTreasury not found' });
-    }
-
-    const fields = (obj.data.content as any).fields as any;
-    onChainBalance = BigInt(fields.balance);
-  } catch (err) {
-    return res.status(502).json({ error: 'Failed to verify on-chain balance' });
+    console.log(`[BALANCE CHECK] Raw response:`, JSON.stringify(objResponse, null, 2));
+  } catch (err: any) {
+    console.error(`[BALANCE CHECK] RPC ERROR for treasuryId=${treasuryId}:`, err.message, err.stack);
+    return res.status(502).json({
+      error: 'Failed to verify on-chain balance',
+      detail: err.message,
+      treasuryId: treasuryId,
+      rpc: SUI_RPC,
+      suggestion: 'Check SUI_RPC env var matches the network where your treasury was deployed (testnet).',
+    });
   }
+
+  // Check if object exists (getObject returns data: null for missing objects, doesn't throw)
+  if (!objResponse || !objResponse.data) {
+    console.error(`[BALANCE CHECK] Object not found on-chain. treasuryId=${treasuryId}`);
+    return res.status(404).json({
+      error: 'AgentTreasury not found on-chain',
+      treasuryId: treasuryId,
+      rpc: SUI_RPC,
+      suggestion: 'This treasury ID does not exist on the current network. Verify the treasury was created on this network and the object ID is correct.',
+    });
+  }
+
+  if (objResponse.data.content?.dataType !== 'moveObject') {
+    console.error(`[BALANCE CHECK] Object is not a moveObject. Type:`, objResponse.data.content?.dataType);
+    return res.status(404).json({
+      error: 'AgentTreasury not found — object is not a Move object',
+      dataType: objResponse.data.content?.dataType,
+      treasuryId: treasuryId,
+    });
+  }
+
+  const fields = (objResponse.data.content as any).fields as any;
+
+  // FIX #2: Handle both bcs-parsed and direct field access
+  // Sui RPC sometimes returns balance as a string, sometimes as a number
+  const rawBalance = fields?.balance;
+  if (rawBalance === undefined || rawBalance === null) {
+    console.error(`[BALANCE CHECK] No balance field. Fields:`, JSON.stringify(fields, null, 2));
+    return res.status(500).json({
+      error: 'AgentTreasury object missing balance field',
+      fields: fields,
+      treasuryId: treasuryId,
+      suggestion: 'The object exists but may be the wrong type, or the Move struct has changed.',
+    });
+  }
+
+  try {
+    onChainBalance = BigInt(rawBalance);
+  } catch (err: any) {
+    console.error(`[BALANCE CHECK] Cannot convert balance to BigInt:`, rawBalance, typeof rawBalance);
+    return res.status(500).json({
+      error: 'Invalid balance format from chain',
+      rawBalance: rawBalance,
+      type: typeof rawBalance,
+    });
+  }
+
+  console.log(`[BALANCE CHECK] Success. Balance=${onChainBalance.toString()} MIST (${(Number(onChainBalance)/1e9).toFixed(6)} SUI)`);
 
   // Check off-chain ledger
   const ledger = getOrCreateLedger(treasuryId);
@@ -672,6 +753,7 @@ app.post('/v1/chat', async (req, res) => {
       balance: onChainBalance.toString(),
       reserved: ledger.reserved.toString(),
       spent: ledger.spent.toString(),
+      available: available.toString(),
       required: estimatedCost.toString(),
     });
   }
@@ -717,6 +799,8 @@ app.post('/v1/chat', async (req, res) => {
 
   // Settle on-chain via authorize_agent_call PTB
   let settlementDigest: string | null = null;
+  let settlementError: string | null = null;
+
   try {
     const tx = new Transaction();
     tx.moveCall({
@@ -737,7 +821,9 @@ app.post('/v1/chat', async (req, res) => {
     });
 
     settlementDigest = result.digest;
+    console.log(`[SETTLEMENT] Success digest=${result.digest}, cost=${actualCost} MIST`);
   } catch (err: any) {
+    settlementError = err.message;
     console.error('[SETTLEMENT] Failed:', err.message);
     ledger.settlementFailures++;
     persistLedger();
@@ -770,6 +856,7 @@ app.post('/v1/chat', async (req, res) => {
     },
     settlement: {
       digest: settlementDigest,
+      error: settlementError,
       pending: ledger.spent.toString(),
       lastSettled: ledger.lastSettlement,
     },
@@ -898,6 +985,8 @@ async function runBatchSettlement() {
 setInterval(runBatchSettlement, SETTLEMENT_INTERVAL);
 
 // ── START SERVER ───────────────────────────────────────────────────────────
+
+validateConfig();
 
 app.listen(PORT, () => {
   console.log(`Otter Gateway v0.3.0 running on http://localhost:${PORT}`);
