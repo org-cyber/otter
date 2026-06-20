@@ -315,6 +315,38 @@ app.get('/health', async (_req, res) => {
   });
 });
 
+// Get TreasuryOwnerCap objects for a wallet
+app.post('/caps', async (req, res) => {
+  const { wallet } = req.body;
+  if (!wallet) {
+    return res.status(400).json({ error: 'wallet required' });
+  }
+
+  try {
+    const objects = await client.getOwnedObjects({
+      owner: wallet,
+      filter: {
+        StructType: `${PACKAGE}::agent_treasury::TreasuryOwnerCap`,
+      },
+      options: { showContent: true },
+    });
+
+    const caps: Record<string, string> = {};
+    for (const obj of objects.data) {
+      if (obj.data?.content?.dataType === 'moveObject') {
+        const fields = (obj.data.content as any).fields as any;
+        const treasuryId = fields.treasury_id;
+        caps[treasuryId] = obj.data.objectId;
+      }
+    }
+
+    res.json({ wallet, caps });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch caps', message: err.message });
+  }
+});
+
+
 // Get provider list and cost rates
 app.get('/providers', async (_req, res) => {
   res.json({
@@ -479,42 +511,71 @@ app.get('/agents/:wallet', async (req, res) => {
   const wallet = req.params.wallet;
 
   try {
-    // Query all AgentTreasury objects owned by this wallet
-    // Note: This is a simplified approach. In production, use event indexing or object listing.
-    const keys = Array.from(apiKeys.entries())
-      .filter(([_, v]) => v.wallet === wallet)
-      .map(([_, v]) => v.treasuryId);
+    // Query both event types
+    const [createdEvents, spawnedEvents] = await Promise.all([
+      client.queryEvents({
+        query: { MoveEventType: `${PACKAGE}::agent_treasury::AgentCreated` },
+        limit: 100,
+      }),
+      client.queryEvents({
+        query: { MoveEventType: `${PACKAGE}::agent_treasury::ChildSpawned` },
+        limit: 100,
+      }),
+    ]);
 
-    const uniqueTreasuryIds = [...new Set(keys)];
+    // Collect all treasury IDs for this wallet
+    const treasuryMap = new Map<string, any>();
 
-    const treasuries = [];
-    for (const id of uniqueTreasuryIds) {
+    // Process AgentCreated (masters)
+    for (const e of createdEvents.data) {
+      if (e.parsedJson?.owner === wallet) {
+        treasuryMap.set(e.parsedJson.treasury_id, {
+          id: e.parsedJson.treasury_id,
+          name: e.parsedJson.name,
+          owner: e.parsedJson.owner,
+          parent: null,
+          balance: '0',
+          paused: false,
+        });
+      }
+    }
+
+    // Process ChildSpawned (children)
+    for (const e of spawnedEvents.data) {
+      if (e.parsedJson?.owner === wallet) {
+        treasuryMap.set(e.parsedJson.child_id, {
+          id: e.parsedJson.child_id,
+          name: e.parsedJson.name,
+          owner: e.parsedJson.owner,
+          parent: e.parsedJson.parent_id,
+          balance: '0',
+          paused: false,
+        });
+      }
+    }
+
+    const myTreasuries = Array.from(treasuryMap.values());
+
+    // Fetch current balances
+    for (const t of myTreasuries) {
       try {
         const obj = await client.getObject({
-          id,
+          id: t.id,
           options: { showContent: true },
         });
         if (obj.data?.content?.dataType === 'moveObject') {
           const fields = (obj.data.content as any).fields as any;
-          treasuries.push({
-            treasuryId: id,
-            name: fields.name,
-            balance: (BigInt(fields.balance)).toString(),
-            paused: fields.paused,
-            parent: fields.parent?.fields?.vec?.[0] || null,
-          });
+          t.balance = (BigInt(fields.balance)).toString();
+          t.paused = fields.paused;
         }
-      } catch (e) {
-        // Skip unavailable objects
-      }
+      } catch (e) {}
     }
 
-    res.json({ wallet, count: treasuries.length, treasuries });
+    res.json({ wallet, count: myTreasuries.length, treasuries: myTreasuries });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to fetch agents', message: err.message });
   }
 });
-
 // ── PROTECTED API ROUTE (AGENT KEY MODE) ─────────────────────────────────
 
 app.post('/v1/chat', async (req, res) => {

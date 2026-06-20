@@ -1,0 +1,16 @@
+{
+  "0xff058668802eac6c7e6a2a1e68a39d8cc22057d518b2c39fc9508366d88c49f7": {
+    "treasuryId": "0xff058668802eac6c7e6a2a1e68a39d8cc22057d518b2c39fc9508366d88c49f7",
+    "reserved": "0",
+    "spent": "0",
+    "lastSettlement": 1781897838677,
+    "settlementFailures": 0
+  },
+  "0x1b9e83ace9891ff07d55fdeba90a025cda344f07e4c696d258c2e63f9a4a7cc5": {
+    "treasuryId": "0x1b9e83ace9891ff07d55fdeba90a025cda344f07e4c696d258c2e63f9a4a7cc5",
+    "reserved": "0",
+    "spent": "0",
+    "lastSettlement": 1781898202064,
+    "settlementFailures": 0
+  }
+}
