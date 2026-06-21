@@ -1,789 +1,816 @@
 'use client';
+import { useState, useEffect } from 'react';
+import Image from 'next/image';
+import { ConnectButton } from '@mysten/dapp-kit';
+import { useRouter } from 'next/navigation'; // Add this import
+import Link from 'next/link'; // Or use Link instead of useRouter
 
-import { useState, useEffect, useCallback } from 'react';
-import {
-  ConnectButton,
-  useCurrentAccount,
-  useSignAndExecuteTransaction,
-} from '@mysten/dapp-kit';
-import { Transaction } from '@mysten/sui/transactions';
+// ── DESIGN TOKENS ───────────────────────────────────────────────────────────
+const C = {
+  teal: '#1a6b7a',
+  tealDark: '#0d2b36',
+  tealLight: '#e8f1f3',
+  tealMuted: '#8fb3bd',
+  brown: '#a0785a',
+  brownLight: '#f5ede6',
+  bg: '#f5f7f9',
+  surface: '#ffffff',
+  surfaceHover: '#fafbfc',
+  border: '#e2e8f0',
+  borderStrong: '#cbd5e1',
+  text: '#0f172a',
+  textSecondary: '#475569',
+  textMuted: '#94a3b8',
+  shadow: '0 1px 2px rgba(15,23,42,0.04), 0 1px 3px rgba(15,23,42,0.06)',
+  shadowMd: '0 4px 6px -1px rgba(15,23,42,0.06), 0 2px 4px -2px rgba(15,23,42,0.04)',
+  shadowLg: '0 10px 15px -3px rgba(15,23,42,0.08), 0 4px 6px -4px rgba(15,23,42,0.04)',
+  shadowXl: '0 20px 25px -5px rgba(15,23,42,0.1), 0 8px 10px -6px rgba(15,23,42,0.06)',
+};
 
-// ── CONFIG: Change this to your deployed gateway URL ────────────────────────
-// Local dev:  http://localhost:3001
-// Deployed:   https://your-gateway.onrender.com (or wherever you host it)
-const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:3001';
+// ── ICONS ───────────────────────────────────────────────────────────────────
+const Icon = {
+  Wallet: (p: any) => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" /><path d="M3 5v14a2 2 0 0 0 2 2h16v-5" /><path d="M18 12a2 2 0 0 0 0 4h4v-4Z" />
+    </svg>
+  ),
+  Network: (p: any) => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <rect x="16" y="16" width="6" height="6" rx="1" /><rect x="2" y="16" width="6" height="6" rx="1" /><rect x="9" y="2" width="6" height="6" rx="1" /><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8" />
+    </svg>
+  ),
+  Shield: (p: any) => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+    </svg>
+  ),
+  Zap: (p: any) => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+    </svg>
+  ),
+  Key: (p: any) => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <circle cx="7.5" cy="15.5" r="5.5" /><path d="m21 2-9.6 9.6M15.5 7.5 19 11l3-3-3-3" />
+    </svg>
+  ),
+  Bot: (p: any) => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <rect x="3" y="11" width="18" height="10" rx="2" /><circle cx="12" cy="5" r="2" /><path d="M12 7v4M8 16h.01M16 16h.01" />
+    </svg>
+  ),
+  ArrowRight: (p: any) => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <path d="M5 12h14M12 5l7 7-7 7" />
+    </svg>
+  ),
+  Check: (p: any) => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  ),
+  Github: (p: any) => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" {...p}>
+      <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+    </svg>
+  ),
+  Menu: (p: any) => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="18" x2="21" y2="18" />
+    </svg>
+  ),
+  X: (p: any) => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <path d="M18 6 6 18M6 6l12 12" />
+    </svg>
+  ),
+};
 
-const SUI_SCAN = 'https://suiscan.xyz/testnet/object';
+// ── SHARED STYLES ───────────────────────────────────────────────────────────
+const btnPrimary = {
+  padding: '14px 28px',
+  fontSize: 14,
+  fontWeight: 600,
+  background: C.teal,
+  color: '#fff',
+  border: 'none',
+  borderRadius: 8,
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+  transition: 'all 0.2s ease',
+  letterSpacing: '-0.01em',
+};
 
-// ── PACKAGE ID: Must match the network you're connected to ──────────────────
-// Testnet package ID — update this after each contract redeploy
-const PACKAGE_ID = '0xdbfb39eabe0938cb1495443b733e00bd90799a6d5ea870227d9f0e426091b480';
+const btnSecondary = {
+  padding: '14px 28px',
+  fontSize: 14,
+  fontWeight: 600,
+  background: C.surface,
+  color: C.textSecondary,
+  border: `1px solid ${C.border}`,
+  borderRadius: 8,
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+  transition: 'all 0.2s ease',
+  letterSpacing: '-0.01em',
+};
 
-// ── TYPES ───────────────────────────────────────────────────────────────────
+const sectionTitle = {
+  fontSize: 14,
+  fontWeight: 600,
+  color: C.teal,
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+  marginBottom: 12,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+};
 
-interface TreasuryNode {
-  id: string;
-  name: string;
-  owner: string;
-  balance: string;
-  paused: boolean;
-  parent: string | null;
-  children: TreasuryNode[];
-}
+const cardStyle = {
+  background: C.surface,
+  border: `1px solid ${C.border}`,
+  borderRadius: 12,
+  padding: 32,
+  boxShadow: C.shadow,
+  transition: 'all 0.3s ease',
+};
 
-interface ApiKeyRecord {
-  key: string;
-  treasuryId: string;
-  label: string;
-  createdAt: number;
-  revoked: boolean;
-  allowResume: boolean;
-}
-
-interface ProviderInfo {
-  configured: boolean;
-  models: Record<string, { costPer1kTokens: number }>;
-}
-
-// ── UTILITY ─────────────────────────────────────────────────────────────────
-
-function formatSui(mist: string): string {
-  return (Number(mist) / 1e9).toFixed(6);
-}
-
-function formatDate(ts: number): string {
-  return new Date(ts).toLocaleString();
-}
-
-function copyToClipboard(text: string): Promise<void> {
-  return navigator.clipboard.writeText(text);
-}
-
-// ── COMPONENT ─────────────────────────────────────────────────────────────
-
-export default function Home() {
-  const account = useCurrentAccount();
-  const { mutate: signAndExecute } = useSignAndExecuteTransaction();
-  const wallet = account?.address;
-
-  const [treasuries, setTreasuries] = useState<TreasuryNode[]>([]);
-  const [selectedTreasury, setSelectedTreasury] = useState<string | null>(null);
-  const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
-  const [providers, setProviders] = useState<Record<string, ProviderInfo>>({});
-  const [ownerCaps, setOwnerCaps] = useState<Record<string, string>>({});
-
-  const [newTreasuryName, setNewTreasuryName] = useState('');
-  const [newTreasuryDeposit, setNewTreasuryDeposit] = useState('0.05');
-
-  const [spawnParentId, setSpawnParentId] = useState('');
-  const [spawnName, setSpawnName] = useState('');
-  const [spawnBudget, setSpawnBudget] = useState('0.01');
-  const [spawnDailyCap, setSpawnDailyCap] = useState('5000000');
-  const [spawnProviders, setSpawnProviders] = useState<string[]>(['groq']);
-
-  const [prompt1, setPrompt1] = useState('');
-  const [prompt2, setPrompt2] = useState('');
-  const [prompt3, setPrompt3] = useState('');
-  const [parallelResults, setParallelResults] = useState<any[]>([]);
-  const [parallelLoading, setParallelLoading] = useState(false);
-
-  const [loading, setLoading] = useState<Record<string, boolean>>({});
-  const [error, setError] = useState<string | null>(null);
-
-  // ── FETCH OWNER CAPS ───────────────────────────────────────────────────────
-
-  const fetchOwnerCaps = useCallback(async () => {
-    if (!wallet) return;
-    try {
-      const res = await fetch(`${GATEWAY_URL}/caps`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wallet }),
-      });
-      const data = await res.json();
-      setOwnerCaps(data.caps || {});
-    } catch (err) {
-      console.error('Fetch caps error:', err);
-    }
-  }, [wallet]);
-
-  // ── REFRESH FUNCTIONS ────────────────────────────────────────────────────
-
-  const refreshTreasuries = useCallback(async () => {
-    if (!wallet) return;
-    try {
-      const res = await fetch(`${GATEWAY_URL}/agents/${wallet}`);
-      const data = await res.json();
-      const list = data.treasuries || [];
-
-      const masters = list.filter((t: any) => !t.parent);
-      const children = list.filter((t: any) => t.parent);
-
-      const tree: TreasuryNode[] = masters.map((m: any) => ({
-        ...m,
-        children: children
-          .filter((c: any) => c.parent === m.id)
-          .map((c: any) => ({ ...c, children: [] })),
-      }));
-
-      setTreasuries(tree);
-    } catch (err) {
-      console.error('Treasuries fetch error:', err);
-    }
-  }, [wallet]);
-
-  const refreshApiKeys = useCallback(async () => {
-    if (!wallet) return;
-    try {
-      const res = await fetch(`${GATEWAY_URL}/keys/${wallet}`);
-      const data = await res.json();
-      setApiKeys(data.keys || []);
-    } catch (err) {
-      console.error('API keys error:', err);
-    }
-  }, [wallet]);
-
-  const refreshProviders = useCallback(async () => {
-    try {
-      const res = await fetch(`${GATEWAY_URL}/providers`);
-      const data = await res.json();
-      setProviders(data.providers || {});
-    } catch (err) {
-      console.error('Providers fetch error:', err);
-    }
-  }, []);
-
-  // ── POLLING ──────────────────────────────────────────────────────────────
+export default function LandingPage() {
+  const [scrolled, setScrolled] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
-    if (!wallet) return;
-    refreshTreasuries();
-    refreshApiKeys();
-    refreshProviders();
-    fetchOwnerCaps();
+    const handleScroll = () => setScrolled(window.scrollY > 20);
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
-    const interval = setInterval(() => {
-      refreshTreasuries();
-      fetchOwnerCaps();
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [wallet, refreshTreasuries, refreshApiKeys, refreshProviders, fetchOwnerCaps]);
+  const features = [
+    {
+      icon: <Icon.Wallet style={{ color: C.teal }} />,
+      title: 'On-Chain Treasuries',
+      desc: 'Each agent gets its own Sui object with isolated budget management. No more shared wallet chaos.',
+    },
+    {
+      icon: <Icon.Network style={{ color: C.teal }} />,
+      title: 'Hierarchical Spawning',
+      desc: 'Master treasuries spawn child agents with programmable budgets, daily caps, and automatic reclamation.',
+    },
+    {
+      icon: <Icon.Shield style={{ color: C.teal }} />,
+      title: 'Capability-Based Security',
+      desc: 'TreasuryOwnerCaps enforce strict governance. Only authorized operations can modify treasury state.',
+    },
+    {
+      icon: <Icon.Key style={{ color: C.teal }} />,
+      title: 'Scoped API Keys',
+      desc: 'Generate API keys tied to specific treasuries. Fine-grained access control with optional resume permissions.',
+    },
+    {
+      icon: <Icon.Zap style={{ color: C.teal }} />,
+      title: 'Parallel Execution',
+      desc: 'Fire multiple agents simultaneously. Each spends from its own balance with real-time cost tracking.',
+    },
+    {
+      icon: <Icon.Bot style={{ color: C.teal }} />,
+      title: 'Multi-Provider Support',
+      desc: 'Integrate with Groq, OpenAI, and more. Configure per-agent provider allowlists and cost models.',
+    },
+  ];
 
-  // ── CREATE MASTER TREASURY ─────────────────────────────────────────────
-
-  const handleCreateTreasury = async () => {
-    if (!wallet) {
-      setError('Connect wallet first');
-      return;
-    }
-
-    setLoading(prev => ({ ...prev, createTreasury: true }));
-    setError(null);
-
-    try {
-      const depositMist = BigInt(Math.floor(parseFloat(newTreasuryDeposit) * 1e9));
-
-      const tx = new Transaction();
-      tx.setGasBudget(10_000_000);
-
-      const [payment] = tx.splitCoins(tx.gas, [tx.pure.u64(depositMist)]);
-
-      const policy = tx.moveCall({
-        target: `${PACKAGE_ID}::agent_treasury::create_policy`,
-        arguments: [
-          tx.pure.u64(5_000_000n),
-          tx.pure.u64(50_000_000n),
-          tx.pure.u64(1_000_000n),
-          tx.pure.vector('string', ['groq']),
-          tx.pure.u64(5),
-        ],
-      });
-
-      tx.moveCall({
-        target: `${PACKAGE_ID}::agent_treasury::create_master_treasury`,
-        arguments: [
-          payment,
-          tx.pure.string(newTreasuryName || 'Master Treasury'),
-          policy,
-          tx.object('0x6'),
-        ],
-      });
-
-      signAndExecute(
-        { transaction: tx },
-        {
-          onSuccess: async () => {
-            setError(null);
-            setNewTreasuryName('');
-            await new Promise(r => setTimeout(r, 3000));
-            await refreshTreasuries();
-            await fetchOwnerCaps();
-            setLoading(prev => ({ ...prev, createTreasury: false }));
-          },
-          onError: (err: any) => {
-            setError('Create treasury failed: ' + err.message);
-            setLoading(prev => ({ ...prev, createTreasury: false }));
-          },
-        }
-      );
-    } catch (err: any) {
-      setError('Error: ' + err.message);
-      setLoading(prev => ({ ...prev, createTreasury: false }));
-    }
-  };
-
-  // ── SPAWN CHILD AGENT ──────────────────────────────────────────────────
-
-  const handleSpawnChild = async () => {
-    if (!wallet || !spawnParentId) {
-      setError('Select a parent treasury');
-      return;
-    }
-
-    const parentCapId = ownerCaps[spawnParentId];
-    if (!parentCapId) {
-      setError('TreasuryOwnerCap not found. Wait for sync or refresh.');
-      return;
-    }
-
-    setLoading(prev => ({ ...prev, spawnChild: true }));
-    setError(null);
-
-    try {
-      const budgetMist = BigInt(Math.floor(parseFloat(spawnBudget) * 1e9));
-
-      const tx = new Transaction();
-      tx.setGasBudget(10_000_000);
-
-      const childPolicy = tx.moveCall({
-        target: `${PACKAGE_ID}::agent_treasury::create_policy`,
-        arguments: [
-          tx.pure.u64(BigInt(spawnDailyCap)),
-          tx.pure.u64(BigInt(spawnDailyCap) * 10n),
-          tx.pure.u64(BigInt(spawnDailyCap) / 5n),
-          tx.pure.vector('string', spawnProviders),
-          tx.pure.u64(3),
-        ],
-      });
-
-      tx.moveCall({
-        target: `${PACKAGE_ID}::agent_treasury::spawn_child_agent`,
-        arguments: [
-          tx.object(parentCapId),
-          tx.object(spawnParentId),
-          tx.pure.u64(budgetMist),
-          tx.pure.string(spawnName || 'Child Agent'),
-          childPolicy,
-          tx.object('0x6'),
-        ],
-      });
-
-      signAndExecute(
-        { transaction: tx },
-        {
-          onSuccess: async () => {
-            setError(null);
-            setSpawnName('');
-            setSpawnBudget('0.01');
-            setSpawnParentId('');
-            await new Promise(r => setTimeout(r, 3000));
-            await refreshTreasuries();
-            await fetchOwnerCaps();
-            setLoading(prev => ({ ...prev, spawnChild: false }));
-          },
-          onError: (err: any) => {
-            setError('Spawn failed: ' + err.message);
-            setLoading(prev => ({ ...prev, spawnChild: false }));
-          },
-        }
-      );
-    } catch (err: any) {
-      setError('Error: ' + err.message);
-      setLoading(prev => ({ ...prev, spawnChild: false }));
-    }
-  };
-
-  // ── RECLAIM CHILD ────────────────────────────────────────────────────────
-
-  const handleReclaimChild = async (parentId: string, childId: string) => {
-    if (!wallet) return;
-
-    const parentCapId = ownerCaps[parentId];
-    if (!parentCapId) {
-      setError('TreasuryOwnerCap not found for parent.');
-      return;
-    }
-
-    setLoading(prev => ({ ...prev, [`reclaim_${childId}`]: true }));
-    setError(null);
-
-    try {
-      const tx = new Transaction();
-      tx.setGasBudget(10_000_000);
-
-      tx.moveCall({
-        target: `${PACKAGE_ID}::agent_treasury::reclaim_child_budget`,
-        arguments: [
-          tx.object(parentCapId),
-          tx.object(parentId),
-          tx.object(childId),
-          tx.object('0x6'),
-        ],
-      });
-
-      signAndExecute(
-        { transaction: tx },
-        {
-          onSuccess: async () => {
-            await new Promise(r => setTimeout(r, 3000));
-            await refreshTreasuries();
-            await fetchOwnerCaps();
-            setLoading(prev => ({ ...prev, [`reclaim_${childId}`]: false }));
-          },
-          onError: (err: any) => {
-            setError('Reclaim failed: ' + err.message);
-            setLoading(prev => ({ ...prev, [`reclaim_${childId}`]: false }));
-          },
-        }
-      );
-    } catch (err: any) {
-      setError('Error: ' + err.message);
-      setLoading(prev => ({ ...prev, [`reclaim_${childId}`]: false }));
-    }
-  };
-
-  // ── CREATE API KEY ─────────────────────────────────────────────────────
-
-  const handleCreateKey = async (
-    treasuryId: string,
-    label: string,
-    allowResume: boolean
-  ): Promise<string | null> => {
-    if (!wallet) return null;
-
-    setLoading(prev => ({ ...prev, [`key_${treasuryId}`]: true }));
-
-    try {
-      const res = await fetch(`${GATEWAY_URL}/keys/create`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          wallet,
-          treasuryId,
-          label: label || 'default',
-          allowResume,
-        }),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `HTTP ${res.status}`);
-      }
-
-      const data = await res.json();
-
-      if (data.status === 'success') {
-        await refreshApiKeys();
-        return data.key;
-      } else {
-        setError(data.error || 'Failed to create key');
-        return null;
-      }
-    } catch (err: any) {
-      setError(err.message);
-      return null;
-    } finally {
-      setLoading(prev => ({ ...prev, [`key_${treasuryId}`]: false }));
-    }
-  };
-
-  // ── PARALLEL DEMO ────────────────────────────────────────────────────────
-
-  const handleParallelCall = async (treasuryId: string, prompt: string, index: number) => {
-    if (!prompt.trim()) return null;
-
-    const activeKey = apiKeys.find(k => k.treasuryId === treasuryId && !k.revoked);
-    if (!activeKey) {
-      setError(`No active API key for agent ${index + 1}`);
-      return null;
-    }
-
-    try {
-      const res = await fetch(`${GATEWAY_URL}/v1/chat`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${activeKey.key}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'llama-3.1-8b-instant',
-          messages: [{ role: 'user', content: prompt.trim() }],
-          temperature: 0.7,
-          max_tokens: 256,
-        }),
-      });
-
-      const data = await res.json();
-      return { index, ...data, error: data.error || null };
-    } catch (err: any) {
-      return { index, error: err.message };
-    }
-  };
-
-  const handleExecuteAll = async () => {
-    setParallelLoading(true);
-    setParallelResults([]);
-    setError(null);
-
-    const eligibleTreasuries = treasuries
-      .flatMap(t => [t, ...t.children])
-      .filter(t => apiKeys.some(k => k.treasuryId === t.id && !k.revoked))
-      .slice(0, 3);
-
-    if (eligibleTreasuries.length === 0) {
-      setError('No agents with active API keys. Create keys first.');
-      setParallelLoading(false);
-      return;
-    }
-
-    const prompts = [prompt1, prompt2, prompt3];
-
-    const results = await Promise.all(
-      eligibleTreasuries.map((t, i) => 
-        handleParallelCall(t.id, prompts[i] || 'Hello', i)
-      )
-    );
-
-    setParallelResults(results.filter(Boolean));
-    setParallelLoading(false);
-  };
-
-  // ── RENDER ───────────────────────────────────────────────────────────────
+  const useCases = [
+    {
+      title: 'AI Agent Swarms',
+      desc: 'Deploy autonomous research agents that collaborate within budget constraints. Each agent has its own treasury for tool usage and API calls.',
+    },
+    {
+      title: 'DAO Treasury Management',
+      desc: 'Create sub-treasuries for different working groups. Set spending limits and reclaim unused funds automatically.',
+    },
+    {
+      title: 'Multi-Tenant SaaS',
+      desc: 'Give each customer their own isolated treasury. One API gateway, infinite tenant isolation with on-chain audit trails.',
+    },
+  ];
 
   return (
-    <div style={{ maxWidth: 1100, margin: '0 auto', padding: 40, background: '#0a0a0a', minHeight: '100vh', color: '#fff' }}>
-      <div style={{ marginBottom: 32 }}>
-        <h1 style={{ fontSize: 36, marginBottom: 4, fontWeight: 800 }}>OTTER</h1>
-        <p style={{ color: '#888', fontSize: 14 }}>
-          Autonomous Agent Treasury Protocol. One API key. Multiple agents. On-chain objects.
-        </p>
-      </div>
-
-      <div style={{ marginBottom: 32 }}>
-        <ConnectButton />
-      </div>
-
-      {error && (
-        <div style={{
-          background: '#331111', border: '1px solid #ff4444', padding: 16, borderRadius: 8,
-          marginBottom: 24, color: '#ff8888', fontSize: 14,
+    <>
+      <style>{`
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slideIn { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
+        * { box-sizing: border-box; }
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
+      `}</style>
+      
+      <div style={{ minHeight: '100vh', background: C.bg, color: C.text }}>
+        {/* ── NAVIGATION ───────────────────────────────────────────────────── */}
+        <nav style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 50,
+          background: scrolled ? 'rgba(245,247,249,0.95)' : 'transparent',
+          backdropFilter: scrolled ? 'blur(12px)' : 'none',
+          WebkitBackdropFilter: scrolled ? 'blur(12px)' : 'none',
+          borderBottom: scrolled ? `1px solid ${C.border}` : 'none',
+          transition: 'all 0.3s ease',
         }}>
-          ⚠️ {error}
-          <button onClick={() => setError(null)} style={{ float: 'right', background: 'transparent', border: 'none', color: '#ff8888', cursor: 'pointer', fontSize: 16 }}>✕</button>
-        </div>
-      )}
-
-      {wallet && (
-        <div>
-          {/* Create Master Treasury */}
-          <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24 }}>
-            <h2 style={{ fontSize: 18, marginBottom: 16 }}>🏦 Create Master Treasury</h2>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-              <input
-                type="text" placeholder="Treasury name" value={newTreasuryName}
-                onChange={(e) => setNewTreasuryName(e.target.value)}
-                style={{ flex: 1, minWidth: 200, padding: 10, background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, color: '#fff', fontSize: 13 }}
+          <div style={{
+            maxWidth: 1200,
+            margin: '0 auto',
+            padding: '16px 32px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <Image
+                src="/logo.jpg"
+                alt="Otter"
+                width={32}
+                height={32}
+                style={{ borderRadius: 6, objectFit: 'contain' }}
               />
-              <input
-                type="number" placeholder="Deposit (SUI)" value={newTreasuryDeposit}
-                onChange={(e) => setNewTreasuryDeposit(e.target.value)} step="0.01" min="0.001"
-                style={{ width: 120, padding: 10, background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, color: '#fff', fontSize: 13 }}
-              />
-              <button
-                onClick={handleCreateTreasury} disabled={loading.createTreasury}
-                style={{ padding: '10px 20px', fontSize: 14, fontWeight: 'bold', background: loading.createTreasury ? '#333' : '#00d4aa', color: '#000', border: 'none', borderRadius: 6, cursor: loading.createTreasury ? 'not-allowed' : 'pointer' }}
-              >
-                {loading.createTreasury ? 'Creating...' : 'Create Treasury'}
-              </button>
+              <span style={{
+                fontSize: 18,
+                fontWeight: 700,
+                color: C.tealDark,
+                letterSpacing: '-0.02em',
+              }}>
+                OTTER
+              </span>
             </div>
-            <p style={{ color: '#666', fontSize: 12 }}>Creates a shared Sui object with your deposit. You get a TreasuryOwnerCap.</p>
+
+            {/* Desktop Nav */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 32 }}>
+              <a href="#features" style={{
+                fontSize: 14,
+                color: C.textSecondary,
+                textDecoration: 'none',
+                fontWeight: 500,
+                transition: 'color 0.15s ease',
+              }}
+                onMouseEnter={e => e.currentTarget.style.color = C.text}
+                onMouseLeave={e => e.currentTarget.style.color = C.textSecondary}
+              >
+                Features
+              </a>
+              <a href="#how-it-works" style={{
+                fontSize: 14,
+                color: C.textSecondary,
+                textDecoration: 'none',
+                fontWeight: 500,
+                transition: 'color 0.15s ease',
+              }}
+                onMouseEnter={e => e.currentTarget.style.color = C.text}
+                onMouseLeave={e => e.currentTarget.style.color = C.textSecondary}
+              >
+                How it Works
+              </a>
+              <a href="#use-cases" style={{
+                fontSize: 14,
+                color: C.textSecondary,
+                textDecoration: 'none',
+                fontWeight: 500,
+                transition: 'color 0.15s ease',
+              }}
+                onMouseEnter={e => e.currentTarget.style.color = C.text}
+                onMouseLeave={e => e.currentTarget.style.color = C.textSecondary}
+              >
+                Use Cases
+              </a>
+              <div style={{
+                padding: 4,
+                background: C.surface,
+                border: `1px solid ${C.border}`,
+                borderRadius: 8,
+              }}>
+                <ConnectButton />
+              </div>
+            </div>
+
+            {/* Mobile Menu Button */}
+            <button
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              style={{
+                display: 'none',
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                padding: 8,
+                color: C.text,
+              }}
+            >
+              {mobileMenuOpen ? <Icon.X /> : <Icon.Menu />}
+            </button>
           </div>
 
-          {/* Treasury Tree */}
-          <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24 }}>
-            <h2 style={{ fontSize: 18, marginBottom: 16 }}>🌳 Agent Treasury Tree</h2>
-            {treasuries.length === 0 ? (
-              <p style={{ color: '#888' }}>No treasuries yet. Create one above.</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {treasuries.map(master => (
-                  <TreasuryTreeNode
-                    key={master.id}
-                    node={master}
-                    onSpawn={setSpawnParentId}
-                    onReclaim={handleReclaimChild}
-                    onCreateKey={handleCreateKey}
-                    onSelect={setSelectedTreasury}
-                    selected={selectedTreasury}
-                    loading={loading}
-                    apiKeys={apiKeys}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Spawn Child Modal */}
-          {spawnParentId && (
-            <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24, border: '1px solid #00d4aa33' }}>
-              <h3 style={{ fontSize: 16, marginBottom: 12, color: '#00d4aa' }}>
-                Spawn Child Agent from {spawnParentId.slice(0, 16)}...
-              </h3>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-                <input type="text" placeholder="Agent name" value={spawnName} onChange={(e) => setSpawnName(e.target.value)}
-                  style={{ flex: 1, minWidth: 150, padding: 10, background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, color: '#fff', fontSize: 13 }} />
-                <input type="number" placeholder="Budget (SUI)" value={spawnBudget} onChange={(e) => setSpawnBudget(e.target.value)} step="0.001"
-                  style={{ width: 100, padding: 10, background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, color: '#fff', fontSize: 13 }} />
-                <input type="number" placeholder="Daily cap (MIST)" value={spawnDailyCap} onChange={(e) => setSpawnDailyCap(e.target.value)}
-                  style={{ width: 120, padding: 10, background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, color: '#fff', fontSize: 13 }} />
-                <button onClick={handleSpawnChild} disabled={loading.spawnChild}
-                  style={{ padding: '10px 20px', fontSize: 14, fontWeight: 'bold', background: loading.spawnChild ? '#333' : '#00d4aa', color: '#000', border: 'none', borderRadius: 6, cursor: loading.spawnChild ? 'not-allowed' : 'pointer' }}>
-                  {loading.spawnChild ? 'Spawning...' : 'Spawn Agent'}
-                </button>
-                <button onClick={() => setSpawnParentId('')}
-                  style={{ padding: '10px 16px', fontSize: 14, background: '#333', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
-                  Cancel
-                </button>
-              </div>
+          {/* Mobile Menu */}
+          {mobileMenuOpen && (
+            <div style={{
+              display: 'none',
+              padding: '16px 32px',
+              background: C.surface,
+              borderTop: `1px solid ${C.border}`,
+              flexDirection: 'column',
+              gap: 16,
+            }}>
+              <a href="#features" onClick={() => setMobileMenuOpen(false)}>Features</a>
+              <a href="#how-it-works" onClick={() => setMobileMenuOpen(false)}>How it Works</a>
+              <a href="#use-cases" onClick={() => setMobileMenuOpen(false)}>Use Cases</a>
             </div>
           )}
+        </nav>
 
-          {/* Parallel Demo */}
-          <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24 }}>
-            <h2 style={{ fontSize: 18, marginBottom: 16 }}>⚡ Parallel Agent Execution</h2>
-            <p style={{ color: '#888', fontSize: 12, marginBottom: 12 }}>Fire prompts to multiple agents simultaneously. Each agent spends from its own object-held balance.</p>
+        {/* ── HERO SECTION ────────────────────────────────────────────────── */}
+        <section style={{
+          padding: '120px 32px 80px',
+          maxWidth: 1200,
+          margin: '0 auto',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          textAlign: 'center',
+          animation: 'fadeIn 0.8s ease',
+        }}>
+          <div style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '8px 16px',
+            background: C.tealLight,
+            borderRadius: 20,
+            marginBottom: 24,
+            fontSize: 13,
+            fontWeight: 600,
+            color: C.tealDark,
+          }}>
+            <Icon.Zap style={{ width: 16, height: 16 }} />
+            Built on Sui Blockchain
+          </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
-              {[prompt1, prompt2, prompt3].map((p, i) => (
-                <div key={i}>
-                  <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
-                    Agent {i + 1} {i < treasuries.flatMap(t => [t, ...t.children]).length ? '✓' : '—'}
+          <h1 style={{
+            fontSize: 64,
+            fontWeight: 800,
+            color: C.tealDark,
+            marginBottom: 24,
+            letterSpacing: '-0.03em',
+            lineHeight: 1.1,
+            maxWidth: 900,
+          }}>
+            Autonomous Agent<br />
+            <span style={{ color: C.brown }}>Treasury Protocol</span>
+          </h1>
+
+          <p style={{
+            fontSize: 20,
+            color: C.textSecondary,
+            maxWidth: 700,
+            marginBottom: 40,
+            lineHeight: 1.6,
+          }}>
+            One API key. Multiple agents. On-chain objects. Manage autonomous AI agents 
+            with isolated budgets, hierarchical spawning, and real-time cost tracking on Sui.
+          </p>
+
+     <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', justifyContent: 'center' }}>
+  <Link href="/app" style={{ textDecoration: 'none' }}>
+    <button style={btnPrimary}  onMouseEnter={e => {
+                e.currentTarget.style.background = C.tealDark;
+                e.currentTarget.style.boxShadow = C.shadowMd;
+                e.currentTarget.style.transform = 'translateY(-2px)';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = C.teal;
+                e.currentTarget.style.boxShadow = 'none';
+                e.currentTarget.style.transform = 'translateY(0)';
+              }}>
+      Launch App
+      <Icon.ArrowRight />
+    </button>
+  </Link>
+  
+  <Link href="https://github.com/yourusername/otter" target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none' }}>
+    <button style={btnSecondary}>
+      <Icon.Github />
+      View on GitHub
+    </button>
+  </Link>
+</div>
+          <div style={{
+            marginTop: 80,
+            padding: '40px',
+            background: C.surface,
+            borderRadius: 16,
+            border: `1px solid ${C.border}`,
+            boxShadow: C.shadowLg,
+            maxWidth: 900,
+            width: '100%',
+          }}>
+            <div style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: C.textMuted,
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              marginBottom: 16,
+            }}>
+              Protocol Statistics
+            </div>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: 32,
+            }}>
+              <div>
+                <div style={{ fontSize: 36, fontWeight: 800, color: C.teal, marginBottom: 4 }}>100%</div>
+                <div style={{ fontSize: 13, color: C.textSecondary }}>On-Chain Settlement</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 36, fontWeight: 800, color: C.teal, marginBottom: 4 }}>&lt;1s</div>
+                <div style={{ fontSize: 13, color: C.textSecondary }}>Finality Time</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 36, fontWeight: 800, color: C.teal, marginBottom: 4 }}>∞</div>
+                <div style={{ fontSize: 13, color: C.textSecondary }}>Agent Scalability</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ── FEATURES GRID ───────────────────────────────────────────────── */}
+        <section id="features" style={{
+          padding: '100px 32px',
+          background: C.surface,
+        }}>
+          <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+            <div style={{ textAlign: 'center', marginBottom: 64 }}>
+              <div style={sectionTitle}>
+                <Icon.Zap />
+                Core Features
+              </div>
+              <h2 style={{
+                fontSize: 40,
+                fontWeight: 800,
+                color: C.tealDark,
+                marginBottom: 16,
+                letterSpacing: '-0.02em',
+              }}>
+                Everything you need to manage<br />autonomous agents
+              </h2>
+              <p style={{ fontSize: 18, color: C.textSecondary, maxWidth: 600, margin: '0 auto' }}>
+                Built for production-grade AI agent orchestration with blockchain-backed guarantees.
+              </p>
+            </div>
+
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: 24,
+            }}>
+              {features.map((feature, i) => (
+                <div
+                  key={i}
+                  style={{
+                    ...cardStyle,
+                    animation: `fadeIn 0.6s ease ${i * 0.1}s both`,
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.boxShadow = C.shadowLg;
+                    e.currentTarget.style.transform = 'translateY(-4px)';
+                    e.currentTarget.style.borderColor = C.tealMuted;
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.boxShadow = C.shadow;
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.borderColor = C.border;
+                  }}
+                >
+                  <div style={{
+                    width: 48,
+                    height: 48,
+                    background: C.tealLight,
+                    borderRadius: 10,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginBottom: 20,
+                  }}>
+                    {feature.icon}
                   </div>
-                  <textarea
-                    value={i === 0 ? prompt1 : i === 1 ? prompt2 : prompt3}
-                    onChange={(e) => i === 0 ? setPrompt1(e.target.value) : i === 1 ? setPrompt2(e.target.value) : setPrompt3(e.target.value)}
-                    placeholder={`Prompt for agent ${i + 1}...`} rows={2}
-                    style={{ width: '100%', padding: 8, background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, color: '#fff', fontSize: 13, resize: 'vertical', boxSizing: 'border-box' }}
-                  />
+                  <h3 style={{
+                    fontSize: 18,
+                    fontWeight: 700,
+                    color: C.tealDark,
+                    marginBottom: 12,
+                    letterSpacing: '-0.01em',
+                  }}>
+                    {feature.title}
+                  </h3>
+                  <p style={{ fontSize: 15, color: C.textSecondary, lineHeight: 1.6, margin: 0 }}>
+                    {feature.desc}
+                  </p>
                 </div>
               ))}
             </div>
+          </div>
+        </section>
 
-            <button onClick={handleExecuteAll} disabled={parallelLoading}
-              style={{ padding: '12px 24px', fontSize: 16, fontWeight: 'bold', background: parallelLoading ? '#333' : '#00d4aa', color: '#000', border: 'none', borderRadius: 8, cursor: parallelLoading ? 'not-allowed' : 'pointer' }}>
-              {parallelLoading ? 'Executing...' : 'Execute All Agents'}
-            </button>
-
-            {parallelResults.length > 0 && (
-              <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-                {parallelResults.map((result, i) => (
-                  <div key={i} style={{ padding: 12, background: '#1a1a1a', borderRadius: 8, border: result.error ? '1px solid #ff4444' : '1px solid #00d4aa33' }}>
-                    <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Agent {result.index + 1}</div>
-                    {result.error ? (
-                      <div style={{ color: '#ff4444', fontSize: 12 }}>{result.error}</div>
-                    ) : (
-                      <div>
-                        <div style={{ color: '#00d4aa', fontSize: 12, marginBottom: 4 }}>✓ Success</div>
-                        <div style={{ fontSize: 12, color: '#ccc', lineHeight: 1.4 }}>{result.content?.slice(0, 100)}...</div>
-                        <div style={{ fontSize: 10, color: '#666', marginTop: 4 }}>Cost: {result.cost?.actual} MIST</div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+        {/* ── HOW IT WORKS ────────────────────────────────────────────────── */}
+        <section id="how-it-works" style={{
+          padding: '100px 32px',
+          maxWidth: 1200,
+          margin: '0 auto',
+        }}>
+          <div style={{ textAlign: 'center', marginBottom: 64 }}>
+            <div style={sectionTitle}>
+              <Icon.Network />
+              How It Works
+            </div>
+            <h2 style={{
+              fontSize: 40,
+              fontWeight: 800,
+              color: C.tealDark,
+              marginBottom: 16,
+              letterSpacing: '-0.02em',
+            }}>
+              Three steps to agent management
+            </h2>
           </div>
 
-          {/* API Keys */}
-          <div style={{ background: '#111', padding: 24, borderRadius: 12, marginBottom: 24 }}>
-            <h2 style={{ fontSize: 18, marginBottom: 16 }}>🔑 API Keys</h2>
-            {apiKeys.length === 0 ? (
-              <p style={{ color: '#888' }}>No API keys yet. Create one from a treasury node.</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {apiKeys.map((k, i) => (
-                  <div key={i} style={{ padding: 12, background: '#1a1a1a', borderRadius: 6, fontSize: 13, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontFamily: 'monospace', color: '#aaa' }}>{k.key.slice(0, 24)}...</div>
-                      <div style={{ color: '#888', fontSize: 11, marginTop: 2 }}>
-                        {k.label} • {k.treasuryId.slice(0, 16)}...
-                        {k.allowResume && <span style={{ color: '#00d4aa', marginLeft: 8 }}>● Can resume</span>}
-                        {k.revoked && <span style={{ color: '#ff4444', marginLeft: 8 }}>● Revoked</span>}
-                      </div>
-                    </div>
-                    <div style={{ color: '#888', fontSize: 11 }}>{formatDate(k.createdAt)}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div style={{ marginTop: 16, padding: 12, background: '#0a0a0a', borderRadius: 6 }}>
-              <div style={{ color: '#888', fontSize: 12, marginBottom: 8 }}>Example usage:</div>
-              <code style={{ fontSize: 11, color: '#00d4aa', fontFamily: 'monospace', display: 'block', whiteSpace: 'pre-wrap' }}>
-                {`curl -X POST ${GATEWAY_URL}/v1/chat \\
-  -H "Authorization: Bearer otter_..." \\
-  -H "Content-Type: application/json" \\
-  -d '{"model":"llama-3.1-8b-instant","messages":[{"role":"user","content":"Hello"}]}'`}
-              </code>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── TREASURY TREE NODE ─────────────────────────────────────────────────────
-
-function TreasuryTreeNode({
-  node,
-  onSpawn,
-  onReclaim,
-  onCreateKey,
-  onSelect,
-  selected,
-  loading,
-  apiKeys,
-}: any) {
-  const isSelected = selected === node.id;
-  const [keyLabel, setKeyLabel] = useState('');
-  const [allowResume, setAllowResume] = useState(false);
-  const [newKey, setNewKey] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const nodeKeys = apiKeys.filter((k: any) => k.treasuryId === node.id && !k.revoked);
-  const isChild = !!node.parent;
-
-  return (
-    <div style={{ marginLeft: isChild ? 24 : 0, borderLeft: isChild ? '2px solid #333' : 'none', paddingLeft: isChild ? 12 : 0 }}>
-      <div onClick={() => onSelect(isSelected ? null : node.id)}
-        style={{ background: isSelected ? '#1a2a1a' : '#1a1a1a', border: isSelected ? '1px solid #00d4aa' : '1px solid #222', padding: 16, borderRadius: 10, cursor: 'pointer' }}>
-
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-          <div>
-            <div style={{ fontWeight: 'bold', fontSize: 15, display: 'flex', alignItems: 'center', gap: 8 }}>
-              {isChild ? '🤖' : '🏦'} {node.name}
-              {node.paused && <span style={{ background: '#ff4444', color: '#fff', padding: '2px 8px', borderRadius: 4, fontSize: 10 }}>PAUSED</span>}
-            </div>
-            <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#666', marginTop: 4 }}>{node.id}</div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 24, fontWeight: 'bold', color: '#00d4aa' }}>
-              {formatSui(node.balance)} <span style={{ fontSize: 12, color: '#888' }}>SUI</span>
-            </div>
-            <a href={`${SUI_SCAN}/${node.id}`} target="_blank" rel="noopener noreferrer"
-              style={{ fontSize: 11, color: '#00d4aa', textDecoration: 'none' }} onClick={(e) => e.stopPropagation()}>
-              View on SuiScan →
-            </a>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-          {!isChild && (
-            <button onClick={(e: any) => { e.stopPropagation(); onSpawn(node.id); }}
-              style={{ padding: '6px 12px', fontSize: 12, background: '#00d4aa', color: '#000', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 'bold' }}>
-              + Spawn Child
-            </button>
-          )}
-          {isChild && (
-            <button onClick={(e: any) => { e.stopPropagation(); onReclaim(node.parent, node.id); }}
-              disabled={loading[`reclaim_${node.id}`]}
-              style={{ padding: '6px 12px', fontSize: 12, background: loading[`reclaim_${node.id}`] ? '#333' : '#ff4444', color: '#fff', border: 'none', borderRadius: 4, cursor: loading[`reclaim_${node.id}`] ? 'not-allowed' : 'pointer' }}>
-              {loading[`reclaim_${node.id}`] ? 'Reclaiming...' : '↩ Reclaim'}
-            </button>
-          )}
-          <button
-            onClick={async (e: any) => {
-              e.stopPropagation();
-              const key = await onCreateKey(node.id, keyLabel, allowResume);
-              if (key) {
-                setNewKey(key);
-                setKeyLabel('');
-                setAllowResume(false);
-              }
-            }}
-            disabled={loading[`key_${node.id}`]}
-            style={{
-              padding: '6px 12px',
-              fontSize: 12,
-              background: loading[`key_${node.id}`] ? '#333' : '#00d4aa',
-              color: loading[`key_${node.id}`] ? '#888' : '#000',
-              border: 'none',
-              borderRadius: 4,
-              cursor: loading[`key_${node.id}`] ? 'not-allowed' : 'pointer',
-              fontWeight: 'bold',
-            }}
-          >
-            {loading[`key_${node.id}`] ? 'Creating...' : '🔑 Create Key'}
-          </button>
-        </div>
-
-        {isSelected && (
-          <div 
-            onClick={(e: any) => e.stopPropagation()}
-            style={{ marginTop: 12, padding: 12, background: '#0a0a0a', borderRadius: 6 }}
-          >
-            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-              <input
-                type="text"
-                placeholder="Key label"
-                value={keyLabel}
-                onChange={(e: any) => setKeyLabel(e.target.value)}
-                onClick={(e: any) => e.stopPropagation()}
-                style={{ flex: 1, padding: 8, background: '#1a1a1a', border: '1px solid #333', borderRadius: 4, color: '#fff', fontSize: 12 }} />
-              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#888' }}>
-                <input
-                  type="checkbox"
-                  checked={allowResume}
-                  onChange={(e: any) => setAllowResume(e.target.checked)} onClick={(e: any) => e.stopPropagation()} />
-                Allow resume
-              </label>
-            </div>
-            {newKey && (
-              <div style={{ background: '#0a2a1a', border: '1px solid #00d4aa', padding: 12, borderRadius: 6 }}>
-                <div style={{ color: '#00d4aa', fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>🔐 API Key Created</div>
-                <div style={{ fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all', color: '#fff' }}>{newKey}</div>
-                <button onClick={() => {
-                  copyToClipboard(newKey!);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
+            {[
+              {
+                step: '01',
+                title: 'Create Master Treasury',
+                desc: 'Deploy a shared Sui object with your initial deposit. Receive a TreasuryOwnerCap for governance control.',
+                color: C.teal,
+              },
+              {
+                step: '02',
+                title: 'Spawn Child Agents',
+                desc: 'Create hierarchical child treasuries with isolated budgets, daily caps, and provider allowlists.',
+                color: C.brown,
+              },
+              {
+                step: '03',
+                title: 'Generate API Keys',
+                desc: 'Issue scoped credentials for each agent. Execute parallel requests with automatic cost tracking.',
+                color: C.teal,
+              },
+            ].map((item, i) => (
+              <div
+                key={i}
+                style={{
+                  display: 'flex',
+                  gap: 32,
+                  alignItems: 'flex-start',
+                  padding: 32,
+                  background: C.surface,
+                  borderRadius: 12,
+                  border: `1px solid ${C.border}`,
+                  transition: 'all 0.3s ease',
                 }}
-                  style={{ marginTop: 8, padding: '4px 8px', fontSize: 11, background: '#00d4aa', color: '#000', border: 'none', borderRadius: 4, cursor: 'pointer' }}>
-                  {copied ? '✓ Copied!' : 'Copy'}
-                </button>
+                onMouseEnter={e => {
+                  e.currentTarget.style.boxShadow = C.shadowMd;
+                  e.currentTarget.style.borderColor = item.color;
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.boxShadow = 'none';
+                  e.currentTarget.style.borderColor = C.border;
+                }}
+              >
+                <div style={{
+                  fontSize: 48,
+                  fontWeight: 800,
+                  color: item.color,
+                  opacity: 0.3,
+                  lineHeight: 1,
+                  flexShrink: 0,
+                }}>
+                  {item.step}
+                </div>
+                <div>
+                  <h3 style={{
+                    fontSize: 24,
+                    fontWeight: 700,
+                    color: C.tealDark,
+                    marginBottom: 8,
+                    letterSpacing: '-0.01em',
+                  }}>
+                    {item.title}
+                  </h3>
+                  <p style={{ fontSize: 16, color: C.textSecondary, lineHeight: 1.6, margin: 0 }}>
+                    {item.desc}
+                  </p>
+                </div>
               </div>
-            )}
-            {nodeKeys.length > 0 && <div style={{ fontSize: 11, color: '#888' }}>{nodeKeys.length} active key{nodeKeys.length > 1 ? 's' : ''}</div>}
+            ))}
           </div>
-        )}
-      </div>
+        </section>
 
-      {node.children?.length > 0 && (
-        <div style={{ marginTop: 12 }}>
-          {node.children.map((child: any) => (
-            <TreasuryTreeNode
-              key={child.id}
-              node={child}
-              onSpawn={onSpawn}
-              onReclaim={onReclaim}
-              onCreateKey={onCreateKey}
-              onSelect={onSelect}
-              selected={selected}
-              loading={loading}
-              apiKeys={apiKeys}
-            />
-          ))}
-        </div>
-      )}
-    </div>
+        {/* ── USE CASES ───────────────────────────────────────────────────── */}
+        <section id="use-cases" style={{
+          padding: '100px 32px',
+          background: C.tealDark,
+          color: '#fff',
+        }}>
+          <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+            <div style={{ textAlign: 'center', marginBottom: 64 }}>
+              <div style={{
+                ...sectionTitle,
+                color: C.tealMuted,
+                justifyContent: 'center',
+              }}>
+                <Icon.Bot />
+                Use Cases
+              </div>
+              <h2 style={{
+                fontSize: 40,
+                fontWeight: 800,
+                marginBottom: 16,
+                letterSpacing: '-0.02em',
+              }}>
+                Built for real-world applications
+              </h2>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 24 }}>
+              {useCases.map((useCase, i) => (
+                <div
+                  key={i}
+                  style={{
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: 12,
+                    padding: 32,
+                    transition: 'all 0.3s ease',
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.background = 'rgba(255,255,255,0.1)';
+                    e.currentTarget.style.transform = 'translateY(-4px)';
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.background = 'rgba(255,255,255,0.05)';
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }}
+                >
+                  <h3 style={{
+                    fontSize: 20,
+                    fontWeight: 700,
+                    marginBottom: 12,
+                    color: C.tealMuted,
+                  }}>
+                    {useCase.title}
+                  </h3>
+                  <p style={{ fontSize: 15, lineHeight: 1.6, margin: 0, color: 'rgba(255,255,255,0.8)' }}>
+                    {useCase.desc}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ── CTA SECTION ─────────────────────────────────────────────────── */}
+        <section style={{
+          padding: '120px 32px',
+          maxWidth: 900,
+          margin: '0 auto',
+          textAlign: 'center',
+        }}>
+          <h2 style={{
+            fontSize: 48,
+            fontWeight: 800,
+            color: C.tealDark,
+            marginBottom: 20,
+            letterSpacing: '-0.02em',
+          }}>
+            Ready to deploy your agents?
+          </h2>
+          <p style={{
+            fontSize: 18,
+            color: C.textSecondary,
+            marginBottom: 40,
+            lineHeight: 1.6,
+          }}>
+            Start managing autonomous AI agents with on-chain treasuries today.
+            Open source and built for production.
+          </p>
+          <button
+            style={{
+              ...btnPrimary,
+              padding: '18px 36px',
+              fontSize: 16,
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = C.tealDark;
+              e.currentTarget.style.boxShadow = C.shadowLg;
+              e.currentTarget.style.transform = 'translateY(-2px)';
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = C.teal;
+              e.currentTarget.style.boxShadow = 'none';
+              e.currentTarget.style.transform = 'translateY(0)';
+            }}
+          >
+            Get Started Now
+            <Icon.ArrowRight />
+          </button>
+        </section>
+
+        {/* ── FOOTER ──────────────────────────────────────────────────────── */}
+        <footer style={{
+          padding: '60px 32px 40px',
+          background: C.surface,
+          borderTop: `1px solid ${C.border}`,
+        }}>
+          <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              marginBottom: 40,
+              flexWrap: 'wrap',
+              gap: 32,
+            }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                  <Image
+                    src="/logo.jpg"
+                    alt="Otter"
+                    width={28}
+                    height={28}
+                    style={{ borderRadius: 6 }}
+                  />
+                  <span style={{ fontSize: 20, fontWeight: 700, color: C.tealDark }}>
+                    OTTER
+                  </span>
+                </div>
+                <p style={{ fontSize: 14, color: C.textSecondary, maxWidth: 300, margin: 0 }}>
+                  Autonomous Agent Treasury Protocol on Sui. 
+                  Built for scalable AI agent management.
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', gap: 64 }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16 }}>
+                    Product
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <a href="#features" style={{ fontSize: 14, color: C.textSecondary, textDecoration: 'none' }}>Features</a>
+                    <a href="#how-it-works" style={{ fontSize: 14, color: C.textSecondary, textDecoration: 'none' }}>How it Works</a>
+                    <a href="#use-cases" style={{ fontSize: 14, color: C.textSecondary, textDecoration: 'none' }}>Use Cases</a>
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16 }}>
+                    Resources
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <a href="#" style={{ fontSize: 14, color: C.textSecondary, textDecoration: 'none' }}>Documentation</a>
+                    <a href="#" style={{ fontSize: 14, color: C.textSecondary, textDecoration: 'none' }}>GitHub</a>
+                    <a href="#" style={{ fontSize: 14, color: C.textSecondary, textDecoration: 'none' }}>API Reference</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{
+              paddingTop: 32,
+              borderTop: `1px solid ${C.border}`,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 16,
+            }}>
+              <div style={{ fontSize: 13, color: C.textMuted }}>
+                © 2026 Otter Protocol. Open source under MIT license.
+              </div>
+              <div style={{ display: 'flex', gap: 24 }}>
+                <a href="#" style={{ color: C.textMuted, transition: 'color 0.15s ease' }}
+                  onMouseEnter={e => e.currentTarget.style.color = C.text}
+                  onMouseLeave={e => e.currentTarget.style.color = C.textMuted}
+                >
+                  Privacy
+                </a>
+                <a href="#" style={{ color: C.textMuted, transition: 'color 0.15s ease' }}
+                  onMouseEnter={e => e.currentTarget.style.color = C.text}
+                  onMouseLeave={e => e.currentTarget.style.color = C.textMuted}
+                >
+                  Terms
+                </a>
+              </div>
+            </div>
+          </div>
+        </footer>
+      </div>
+    </>
   );
 }
